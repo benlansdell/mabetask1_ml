@@ -1,0 +1,7 @@
+*.npy
+*.h5
+.vscode
+data/
+results/
+notebooks/.ipynb_checkpoints
+lib/__pycache__
