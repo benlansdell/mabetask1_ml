@@ -25,7 +25,7 @@ seed_everything()
 
 parser = argparse.ArgumentParser() 
 parser.add_argument('features', type = str) #The feature set to use in model
-parser.add_argument('model', type = str) #The feature set to use in model
+parser.add_argument('model', type = str) #The model to use
 parser.add_argument('--submit', action='store_true') #Whether to submit to aicrowd
 parser.add_argument('--parameterset', default = 'default')
 
@@ -72,9 +72,6 @@ def run_rf(X_train, y_train, groups, params = None, refit = False):
 #def format_predictions(preds, groups):
 #   sadf
 
-#TODO:
-# Try neural nets?
-
 # Add HMM on output... to try to smooth estimates of behavior
 # Once we have the output of the RF model (with enough estimators... 100?)
 
@@ -106,12 +103,12 @@ def main(args):
 
     run_model = supported_models[args.model]
 
-    train_features = pd.read_csv(f'data/intermediate/train_{args.features}.csv')
-    test_features = pd.read_csv(f'data/intermediate/test_{args.features}.csv')
+    train_features = pd.read_csv(f'data/intermediate/train_features_{args.features}.csv')
+    test_features = pd.read_csv(f'data/intermediate/test_features_{args.features}.csv')
 
     sample_submission = np.load('data/sample_submission.npy',allow_pickle=True).item()
     
-    with open(f'data/intermediate/test_map_{args.features}.pkl', 'rb') as handle:
+    with open(f'data/intermediate/test_map_features_{args.features}.pkl', 'rb') as handle:
         test_map = pickle.load(handle)
 
     X = train_features.drop(columns = ['annotation', 'seq_id'])
