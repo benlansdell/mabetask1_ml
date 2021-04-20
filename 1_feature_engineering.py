@@ -404,7 +404,7 @@ def main(args):
     feature_maker = supported_features[args.features]
 
     train_df = pd.read_csv('./data/intermediate/train_df.csv')
-    train_features, train_map, _ = feature_maker(train_df)
+    train_features, train_map, name = feature_maker(train_df)
     train_features.to_csv(f'./data/intermediate/train_{name}.csv', index = False)
 
     if args.compute_test:
