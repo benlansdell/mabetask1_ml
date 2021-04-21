@@ -28,6 +28,7 @@ parser.add_argument('features', type = str) #The feature set to use in model
 parser.add_argument('model', type = str) #The model to use
 parser.add_argument('--submit', action='store_true') #Whether to submit to aicrowd
 parser.add_argument('--parameterset', default = 'default')
+parser.add_argument('--test', action='store_true') #Whether to run on test data
 
 def run_askl(X_train, y_train, groups, params = None):
     #TODO
@@ -81,6 +82,7 @@ class Args(object):
         self.model = 'rf'
         self.submit = False
         self.parameterset = None
+        self.test = False
 
 args = Args()
 
@@ -104,7 +106,8 @@ def main(args):
     run_model = supported_models[args.model]
 
     train_features = pd.read_csv(f'data/intermediate/train_features_{args.features}.csv')
-    test_features = pd.read_csv(f'data/intermediate/test_features_{args.features}.csv')
+    if args.test:
+        test_features = pd.read_csv(f'data/intermediate/test_features_{args.features}.csv')
 
     sample_submission = np.load('data/sample_submission.npy',allow_pickle=True).item()
     
@@ -131,8 +134,9 @@ def main(args):
     X_val = X[train_features['seq_id'].isin(val_group)]
     y_val = y[train_features['seq_id'].isin(val_group)]
 
-    X_test = test_features.drop(columns = ['seq_id'])
-    groups_test = test_features['seq_id']
+    if args.test:
+        X_test = test_features.drop(columns = ['seq_id'])
+        groups_test = test_features['seq_id']
 
     print("Running machine learning model")
     model = run_model(X_train, y_train, groups_train, params)
@@ -156,32 +160,34 @@ def main(args):
     print("Performance on validation data")
     print(classification_report(y_val, pred_val))
 
-    print("Predicting fit model on test data")
-    predictions = model.predict(X_test)
+    if args.test:
 
-    print("Preparing submission")
-    fn_out = f"results/submission_{args.features}_ml_{args.model}_paramset_{args.parameterset}.npy"
-    submission = defaultdict(list)
-    for idx in range(len(predictions)):
-        submission[test_map[groups_test[idx]]].append(predictions[idx])
-    np.save(fn_out, submission)
+        print("Predicting fit model on test data")
+        predictions = model.predict(X_test)
 
-    print("Validating submission")
-    valid = validate_submission(submission, sample_submission)
-    if not valid:
-        print("Invalid submission format. Check submission.npy")
-        return 
-    print("Submission validated.")
+        print("Preparing submission")
+        fn_out = f"results/submission_{args.features}_ml_{args.model}_paramset_{args.parameterset}.npy"
+        submission = defaultdict(list)
+        for idx in range(len(predictions)):
+            submission[test_map[groups_test[idx]]].append(predictions[idx])
+        np.save(fn_out, submission)
 
-    #results/submission_features_differences_ml_rf.npy
+        print("Validating submission")
+        valid = validate_submission(submission, sample_submission)
+        if not valid:
+            print("Invalid submission format. Check submission.npy")
+            return 
+        print("Submission validated.")
 
-    if args.submit:
-        login_cmd = f"aicrowd login --api-key {API_KEY}"
-        os.system(login_cmd)
-        sub_cmd = f"aicrowd submission create -c mabe-task-1-classical-classification -f {fn_out}"
-        os.system(sub_cmd)
-    else:
-        print(f"Submission not made. Can do so manually as follows:\n\naicrowd submission create -c mabe-task-1-classical-classification -f {fn_out}\n")
+        #results/submission_features_differences_ml_rf.npy
+
+        if args.submit:
+            login_cmd = f"aicrowd login --api-key {API_KEY}"
+            os.system(login_cmd)
+            sub_cmd = f"aicrowd submission create -c mabe-task-1-classical-classification -f {fn_out}"
+            os.system(sub_cmd)
+        else:
+            print(f"Submission not made. Can do so manually as follows:\n\naicrowd submission create -c mabe-task-1-classical-classification -f {fn_out}\n")
 
 if __name__ == "__main__":
     args = parser.parse_args()
