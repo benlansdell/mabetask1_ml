@@ -58,9 +58,9 @@ def run_rf(X_train, y_train, groups, params = None, refit = False):
     #Setup default parameters
     if params is None:
         params = {}
-        params['n_estimators'] = 100
-        params['criterion'] = 'gini'
-        params['class_weight'] = 'balanced_subsample'
+        params['n_estimators'] = 25
+        params['criterion'] = 'entropy'
+        params['class_weight'] = 'balanced'
 
     #Make random forest classifier, with group-level CV
     model = RandomForestClassifier(**params)
