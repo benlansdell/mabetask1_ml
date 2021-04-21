@@ -111,8 +111,9 @@ def main(args):
 
     sample_submission = np.load('data/sample_submission.npy',allow_pickle=True).item()
     
-    with open(f'data/intermediate/test_map_features_{args.features}.pkl', 'rb') as handle:
-        test_map = pickle.load(handle)
+    if args.test:
+        with open(f'data/intermediate/test_map_features_{args.features}.pkl', 'rb') as handle:
+            test_map = pickle.load(handle)
 
     X = train_features.drop(columns = ['annotation', 'seq_id'])
     y = train_features['annotation']
