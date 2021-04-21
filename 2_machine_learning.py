@@ -18,6 +18,8 @@ from sklearn.model_selection import KFold, GridSearchCV, train_test_split, Leave
 from sklearn.metrics import confusion_matrix, precision_score, recall_score, roc_auc_score, f1_score, accuracy_score, classification_report
 from sklearn.ensemble import RandomForestClassifier
 
+import xgboost as xgb
+
 from lib.utils import seed_everything, validate_submission
 from lib.helper import API_KEY
 
@@ -71,12 +73,18 @@ def run_rf(X_train, y_train, groups, params = None, refit = False):
         model.refit(X_train.copy(), y_train.copy())
     return model
 
-def run_xgb():
-    xgb_model = xgb.XGBClassifier(objective="multi:softprob", random_state=42)
-    xgb_model.fit(X, y)
+def run_xgb(X_train, y_train, groups, params = None, refit = False):
 
-    y_pred = xgb_model.predict(X)
+    #Setup default parameters
+    if params is None:
+        params = {}
+        params['learning_rate'] = 0.01
 
+    model = xgb.XGBClassifier(**params)
+    print("Fitting XGB model")
+    model.fit(X_train, y_train)
+
+    return model 
 
 class Args(object):
     def __init__(self):
@@ -91,7 +99,8 @@ args = Args()
 def main(args):
 
     supported_models = {'askl': run_askl, 
-                          'rf': run_rf}
+                          'rf': run_rf,
+                          'xgb': run_xgb}
 
     if args.model not in supported_models:
         print("Model not found. Select one of", list(supported_models.keys()))

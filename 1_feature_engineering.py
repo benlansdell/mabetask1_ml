@@ -198,6 +198,7 @@ def _compute_rel_angle(df, name, bps, centroid = False):
         df[f'angle_{name}_{mouse_id}'] = np.arccos(cosine_angle)
     return df
 
+@shift_features(window_size=5, n_shifts=3)
 def _compute_ellipsoid(df):
     df = df.copy()
     #Perform SVD
@@ -231,6 +232,7 @@ def _compute_kinematics(df, names, window_size = 5):
             df[f'centroid_{name}_{mouse_id}_accel_y'] = ddy/(window_size**2)
     return df
 
+@shift_features(window_size=5, n_shifts=3)
 def _compute_relative_body_motions(df, window_size = 3):
 
     #Compute vector connecting two centroids
@@ -255,7 +257,8 @@ def _compute_relative_body_motions(df, window_size = 3):
         df[f'scaled_main_centroid_distance_by_ellipse_major_{m_id}'] = dm/df[f'ellipse_major_{m_id}']
 
     return df
-    
+
+@shift_features(window_size=5, n_shifts=3)
 def _compute_relative_body_angles(df):
 
     for idx, m_id in enumerate(mouse_ids):
@@ -283,7 +286,8 @@ def _compute_relative_body_angles(df):
         df[f'{mouse_ids[1-idx]}_in_view_of_{mouse_ids[idx]}'] = (cosine_angle > 1/np.sqrt(2)).astype(float)
 
     return df
-
+    
+@shift_features(window_size=5, n_shifts=3)
 def _compute_iou(df):
 
     mins = {}
