@@ -57,7 +57,8 @@ def run_rf(X_train, y_train, groups, params = None, refit = False):
     if params is None:
         params = {}
         params['n_estimators'] = 100
-        params['criterion'] = 'entropy'
+        params['criterion'] = 'gini'
+        params['class_weight'] = 'balanced_subsample'
 
     #Make random forest classifier, with group-level CV
     model = RandomForestClassifier(**params)
@@ -70,11 +71,12 @@ def run_rf(X_train, y_train, groups, params = None, refit = False):
         model.refit(X_train.copy(), y_train.copy())
     return model
 
-#def format_predictions(preds, groups):
-#   sadf
+def run_xgb():
+    xgb_model = xgb.XGBClassifier(objective="multi:softprob", random_state=42)
+    xgb_model.fit(X, y)
 
-# Add HMM on output... to try to smooth estimates of behavior
-# Once we have the output of the RF model (with enough estimators... 100?)
+    y_pred = xgb_model.predict(X)
+
 
 class Args(object):
     def __init__(self):
