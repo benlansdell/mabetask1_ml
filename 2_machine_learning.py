@@ -10,15 +10,21 @@ from collections import defaultdict
 
 #Auto sklearn
 import autosklearn.classification
-from sklearn.model_selection import GroupShuffleSplit
+from sklearn.model_selection import GroupShuffleSplit, GroupKFold, KFold, GridSearchCV, \
+                                    train_test_split, LeaveOneGroupOut, \
+                                    cross_validate, cross_val_predict
 
 #Random forest
 from sklearn.decomposition import PCA
-from sklearn.model_selection import KFold, GridSearchCV, train_test_split, LeaveOneGroupOut
-from sklearn.metrics import confusion_matrix, precision_score, recall_score, roc_auc_score, f1_score, accuracy_score, classification_report
+from sklearn.metrics import confusion_matrix, precision_score, recall_score, \
+                            roc_auc_score, f1_score, accuracy_score, classification_report
 from sklearn.ensemble import RandomForestClassifier
 
+#XGB
 import xgboost as xgb
+
+#HMM
+import ssm
 
 from lib.utils import seed_everything, validate_submission
 from lib.helper import API_KEY
@@ -32,7 +38,97 @@ parser.add_argument('--submit', action='store_true') #Whether to submit to aicro
 parser.add_argument('--parameterset', default = 'default')
 parser.add_argument('--test', action='store_true') #Whether to run on test data
 
+#########
+## HMM ##
+#########
+
+def logit(p):
+    return np.log(p / (1 - p))
+
+#Idea 2. HMM.
+def fit_hmm(gt, emissions_raw, preds_raw, D, C):
+
+    #Fit empirical transition matrix
+    transition_matrix = np.ones((D,D))
+
+    N = len(gt)
+    
+    for idx in range(N):
+        if idx == 0: continue
+        transition_matrix[gt[idx-1], gt[idx]] += 1
+        
+    for j in range(D):
+        transition_matrix[j] /= np.sum(transition_matrix[j])
+        
+    #Adding the actual predicted category from the RF model (in addition to the probabilities)
+    #helped improve performance -- increase the precision a bit
+    
+    #Turn traces into categories
+    emissions = np.hstack(((emissions_raw*(C-1)).astype(int), np.atleast_2d((preds_raw).astype(int)).T))
+
+    #print(emissions.shape)
+    
+    #Fit empirical emission probabilities
+    emission_dist = np.ones((D, D+1, C))
+    for i in range(D):
+        for j in range(D+1):
+            for k in range(C):
+                ct = np.sum(emissions[(gt == i),j] == k)
+                emission_dist[i, j, k] = max(1, ct)
+            emission_dist[i,j,:] /= np.sum(emission_dist[i,j,:])
+
+    true_hmm = ssm.HMM(D, D+1, observations="categorical", observation_kwargs = {'C': C})
+
+    #Set params to empirical ones
+    true_hmm.transitions.params = [np.log(transition_matrix)]
+
+    #true_hmm.init_state_distn.params stay as is (uniform)
+
+    #Emission probs, stored as logits
+    true_hmm.observations.params = logit(emission_dist)
+        
+    return true_hmm
+
+def infer_hmm(hmm, emissions_raw, preds_raw, C):
+    emissions = np.hstack(((emissions_raw*(C-1)).astype(int), np.atleast_2d((preds_raw).astype(int)).T))
+    return hmm.most_likely_states(emissions)
+
+#################
+## Reweighting ##
+#################
+
+def sample_prob_simplex(n=4):
+    x = sorted(np.append(np.random.uniform(size = n-1), [0,1]))
+    y = np.diff(np.array(x))
+    return y
+
+def optimize_weights(train_labels, train_pred_prob, val_pred_probs, N = 1000):
+    f = lambda w: f1_score(train_labels, np.argmax((train_pred_prob*w), axis = -1), average = 'macro', labels = [0,1,2])
+
+    w_star = np.ones(4)/4
+    f_star = 0
+
+    for idx in range(N):
+        w = sample_prob_simplex()
+        f_curr = f(w)
+        if f_curr > f_star:
+            w_star = w
+            f_star = f_curr
+
+    #Reweight and then apply HMM
+    train_pred_probs_reweighted = train_pred_prob*w_star
+    train_pred_reweighted = np.argmax(train_pred_probs_reweighted, axis = -1)
+
+    #Reweight and then apply HMM
+    val_pred_probs_reweighted = val_pred_probs*w_star
+    val_pred_reweighted = np.argmax(val_pred_probs_reweighted, axis = -1)
+
+    return (w_star, f_star, train_pred_probs_reweighted, train_pred_reweighted, 
+                val_pred_probs_reweighted, val_pred_reweighted)
+
 def run_askl(X_train, y_train, groups, params = None):
+
+    raise NotImplementedError
     #TODO
     # How to get to run with n_jobs > 1?
     os.system('rm -r ./tmp_askl')
@@ -51,16 +147,118 @@ def run_askl(X_train, y_train, groups, params = None):
     askl.fit(X_train, y_train)
     print('Refitting with all data')
     askl.refit(X_train.copy(), y_train.copy())
-    return askl
+    return askl, None
 
-def run_rf(X_train, y_train, groups, params = None, refit = False):
+def run_rf_cv_one_vs_all(X_train, y_train, X_val, y_val, groups, params = None, refit = False):
 
     #Setup default parameters
     if params is None:
         params = {}
-        params['n_estimators'] = 25
+        params['n_estimators'] = 10
         params['criterion'] = 'entropy'
-        params['class_weight'] = 'balanced'
+        #params['class_weight'] = 'balanced'
+
+    #Make random forest classifier, with group-level CV
+    model = RandomForestClassifier(**params)
+
+    print('Fitting random forest model with CV')
+    cv_groups = GroupKFold(n_splits = 5)
+
+    #One vs all: predict just one class at a time, then aggregate
+    predict_proba_train = []
+    predict_train_each_class_pred = []
+    for behavior in range(4):
+        pred_prob = cross_val_predict(model, X_train, y_train == behavior, 
+                                           groups = groups, cv = cv_groups,
+                                           n_jobs = 5, method = 'predict_proba')
+        predict_proba_train.append(pred_prob)
+        pred = np.argmax(pred_prob, axis = 1)
+        predict_train_each_class_pred.append(pred)
+        #Evaluate performance of each classifier on its own:
+        print(f'Performance of class {behavior} classifier (training)')
+        evaluate(y_train == behavior, pred)
+
+    #Combine them to form final prediction
+    predict_proba_train = np.vstack([i[:,1] for i in predict_proba_train]).T
+    pred_train = np.argmax(predict_proba_train, axis = 1)
+
+    #Compute validation predictions
+    predict_proba_val = []
+    predict_val_each_class_pred = []
+    for behavior in range(4):
+        model.fit(X_train, y_train == behavior)
+        pred_prob = model.predict_proba(X_val)
+        predict_proba_val.append(pred_prob)
+        pred = np.argmax(pred_prob, axis = 1)
+        predict_val_each_class_pred.append(pred)
+        #Evaluate performance of each classifier on its own:
+        print(f'Performance of class {behavior} classifier (validation)')
+        evaluate(y_val == behavior, pred)
+
+    predict_proba_val = np.vstack([i[:,1] for i in predict_proba_val]).T
+    pred_val = np.argmax(predict_proba_val, axis = 1)
+
+    return model, predict_proba_train, pred_train, predict_proba_val, pred_val
+
+def run_rf_cv(X_train, y_train, X_val, y_val, groups, params = None, refit = False):
+
+    #Setup default parameters
+    if params is None:
+        params = {}
+        params['n_estimators'] = 10
+        params['criterion'] = 'entropy'
+        #params['class_weight'] = 'balanced'
+
+    #Make random forest classifier, with group-level CV
+    model = RandomForestClassifier(**params)
+
+    print('Fitting random forest model with CV')
+    cv_groups = GroupKFold(n_splits = 5)
+    predict_proba_train = cross_val_predict(model, X_train, y_train, 
+                                           groups = groups, cv = cv_groups,
+                                           n_jobs = 5, method = 'predict_proba')
+
+    #Extract final prediction
+    pred_train = np.argmax(predict_proba_train, axis = 1)
+
+    model.fit(X_train, y_train)
+    predict_proba_val = model.predict_proba(X_val)
+    pred_val = np.argmax(predict_proba_val, axis = 1)
+
+    return model, predict_proba_train, pred_train, predict_proba_val, pred_val
+
+def run_xgb_cv(X_train, y_train, X_val, y_val, groups, params = None, refit = False):
+
+    #Setup default parameters
+    if params is None:
+        params = {}
+        params['learning_rate'] = 0.01
+
+    model = xgb.XGBClassifier(**params)
+    print('Fitting XGB model with CV')
+    cv_groups = GroupKFold(n_splits = 5)
+    predict_proba_train = cross_val_predict(model, X_train, y_train, 
+                                           groups = groups, cv = cv_groups,
+                                           n_jobs = 5, method = 'predict_proba')
+
+    #Extract final prediction
+    pred_train = np.argmax(predict_proba_train, axis = 1)
+
+    #Use trained model on validation data.... how?
+    model.fit(X_train, y_train)
+    predict_proba_val = model.predict_proba(X_val)
+    pred_val = np.argmax(predict_proba_val, axis = 1)
+
+    return model, predict_proba_train, pred_train, predict_proba_val, pred_val
+
+def run_rf(X_train, y_train, X_val, y_val, groups, params = None, refit = False):
+
+    #Setup default parameters
+    if params is None:
+        params = {}
+        params['n_estimators'] = 10
+        params['criterion'] = 'entropy'
+        #params['class_weight'] = 'balanced'
 
     #Make random forest classifier, with group-level CV
     model = RandomForestClassifier(**params)
@@ -71,9 +269,18 @@ def run_rf(X_train, y_train, groups, params = None, refit = False):
     if refit:
         print('Refitting with all data')
         model.refit(X_train.copy(), y_train.copy())
-    return model
 
-def run_xgb(X_train, y_train, groups, params = None, refit = False):
+    #Compute proba
+    pred_proba_train = model.predict_proba(X_train)
+    pred_proba_val = model.predict_proba(X_val)
+
+    #Compute performance measures
+    pred_train = model.predict(X_train)
+    pred_val = model.predict(X_val)
+
+    return model, pred_proba_train, pred_train, pred_proba_val, pred_val
+
+def run_xgb(X_train, y_train, X_val, y_val, groups, params = None, refit = False):
 
     #Setup default parameters
     if params is None:
@@ -84,11 +291,31 @@ def run_xgb(X_train, y_train, groups, params = None, refit = False):
     print("Fitting XGB model")
     model.fit(X_train, y_train)
 
-    return model 
+    #Compute proba
+    pred_proba_train = model.predict_proba(X_train)
+    pred_proba_val = model.predict_proba(X_val)
+
+    #Compute performance measures
+    pred_train = model.predict(X_train)
+    pred_val = model.predict(X_val)
+
+    return model, pred_proba_train, pred_train, pred_proba_val, pred_val
+
+def evaluate(y_train, pred_train, y_val = None, pred_val = None):
+    print("Performance on training data")
+    print(classification_report(y_train, pred_train))
+    if y_val is not None:
+        print("Performance on validation data")
+        print(classification_report(y_val, pred_val))
+    print("Training F1 score: (only for behavior labels)")
+    print(f1_score(y_train, pred_train, labels = [0, 1, 2], average = 'macro'))
+    if y_val is not None:
+        print("Validation F1 score: (only for behavior labels)")
+        print(f1_score(y_val, pred_val, labels = [0, 1, 2], average = 'macro'))
 
 class Args(object):
     def __init__(self):
-        self.features = 'features_differences'
+        self.features = 'distances'
         self.model = 'rf'
         self.submit = False
         self.parameterset = None
@@ -100,7 +327,9 @@ def main(args):
 
     supported_models = {'askl': run_askl, 
                           'rf': run_rf,
-                          'xgb': run_xgb}
+                          'xgb': run_xgb,
+                          'rf_cv': run_rf_cv,
+                          'xgb_cv': run_xgb_cv}
 
     if args.model not in supported_models:
         print("Model not found. Select one of", list(supported_models.keys()))
@@ -146,16 +375,13 @@ def main(args):
     X_val = X[train_features['seq_id'].isin(val_group)]
     y_val = y[train_features['seq_id'].isin(val_group)]
 
-    if args.test:
-        X_test = test_features.drop(columns = ['seq_id'])
-        groups_test = test_features['seq_id']
-
     print("Running machine learning model")
-    model = run_model(X_train, y_train, groups_train, params)
+    model, pred_proba_train, pred_train, pred_proba_val, pred_val = \
+                run_model(X_train, y_train, X_val, y_val, groups_train, params)
 
-    #Compute performance measures
-    pred_train = model.predict(X_train)
-    pred_val = model.predict(X_val)
+    evaluate(y_train, pred_train, y_val, pred_val)
+
+    #Can add HMM and reweighting here... based on training data, and based on predicted probabilities
 
     #Save training and validation predictions
     fn_out = f"results/train_validation_{args.features}_ml_{args.model}_paramset_{args.parameterset}.pkl"
@@ -166,13 +392,28 @@ def main(args):
     with open(fn_out, 'wb') as handle:
         pickle.dump(save_data, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
-    print("Performance on training data")
-    print(classification_report(y_train, pred_train))
+    print("HMM optimization")
+    D = pred_proba_val.shape[1]
+    C = 11
+    lambdas = np.logspace(1, 30, 10)
 
-    print("Performance on validation data")
-    print(classification_report(y_val, pred_val))
+    hmm = fit_hmm(np.array(y_train), np.array(pred_proba_train), np.array(pred_train), D, C)
+    hmm_pred = infer_hmm(hmm, np.array(pred_proba_train), np.array(pred_train), C)
+    hmm_pred_val = infer_hmm(hmm, np.array(pred_proba_val), np.array(pred_val), C)
+
+    evaluate(y_train, hmm_pred, y_val, hmm_pred_val)
+
+    print("Reweighting for optimal F1 score")
+    (w_star, f_star, train_pred_probs_reweighted, train_pred_reweighted, 
+                val_pred_probs_reweighted, val_pred_reweighted) = \
+                    optimize_weights(y_train, pred_proba_train, pred_proba_val)
+
+    print(w_star, f_star)
+    evaluate(y_train, train_pred_reweighted, y_val, val_pred_reweighted)
 
     if args.test:
+        X_test = test_features.drop(columns = ['seq_id'])
+        groups_test = test_features['seq_id']
 
         print("Predicting fit model on test data")
         predictions = model.predict(X_test)
@@ -203,5 +444,4 @@ def main(args):
 
 if __name__ == "__main__":
     args = parser.parse_args()
-    print(args.test)
     main(args)

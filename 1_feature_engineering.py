@@ -11,16 +11,18 @@ from itertools import product
 
 from sklearn.impute import SimpleImputer
 
+#The test data is time consuming to featurize...
+
 parser = argparse.ArgumentParser() 
 parser.add_argument('features', type = str)
-parser.add_argument('compute_test', action = 'store_true')
+parser.add_argument('--compute_test', action = 'store_true')
 
 #Shift decorator
 #If a feature creation function has this applied then the features are
 #automatically shifted and concatenated with the rest of the table
 
 #The decorator maker, so we can provide arguments
-def shift_features(window_size = 5, n_shifts = 3):
+def augment_features(window_size = 5, n_shifts = 3, mode = 'shift'):
     #The decorator
     def decorator(feature_function):
         #What is called instead of the actual function, assumes the feature making
@@ -28,19 +30,38 @@ def shift_features(window_size = 5, n_shifts = 3):
         def wrapper(*args, **kwargs):
             #Compute the features
             #print(args, kwargs, args[0])
+            if 'mode' in kwargs:
+                mode = kwargs['mode']
+            if 'n_shifts' in kwargs:
+                n_shifts = kwargs['n_shifts']
+            if n_shifts == 0: return args[0]
+
             old_cols = set(args[0].columns)
             df = feature_function(*args, **kwargs)
             new_cols = set(df.columns)
             added_cols = list(new_cols.difference(old_cols))
-            periods = [-(i+1)*window_size for i in range(n_shifts)] + \
-                      [(i+1)*window_size for i in range(n_shifts)]
             #Shift the features just made
             shifted_data = []
-            #Rename all column names
-            for p in periods:
-                s_df = df[added_cols].shift(p)
-                s_df = s_df.rename(columns = {k:f'{k}_shifted_{p}' for k in added_cols})
-                shifted_data.append(s_df)
+            if mode == 'distr':
+                window_sizes = [1, 5, 10]
+                for ws in window_sizes:
+                    data = np.dstack([np.array(df[added_cols].shift(p)) for p in range(-ws, ws+1)])
+                    min_data = pd.DataFrame(np.min(data, axis = 2), columns = [f'{cn}_min_pm_{ws}' for cn in added_cols])
+                    max_data = pd.DataFrame(np.max(data, axis = 2), columns = [f'{cn}_max_pm_{ws}' for cn in added_cols])
+                    std_data = pd.DataFrame(np.std(data, axis = 2), columns = [f'{cn}_std_pm_{ws}' for cn in added_cols])
+                    mean_data = pd.DataFrame(np.mean(data, axis = 2), columns = [f'{cn}_mean_pm_{ws}' for cn in added_cols])
+                    shifted_data += [min_data, max_data, std_data, mean_data]
+            else:
+                periods = [-(i+1)*window_size for i in range(n_shifts)] + \
+                        [(i+1)*window_size for i in range(n_shifts)]
+                #Rename all column names
+                for p in periods:
+                    if mode == 'shift':
+                        s_df = df[added_cols].shift(p)
+                    elif mode == 'diff':
+                        s_df = df[added_cols].diff(p)
+                    s_df = s_df.rename(columns = {k:f'{k}_shifted_{p}' for k in added_cols})
+                    shifted_data.append(s_df)
             #Combine with current table
             df = pd.concat([df] + shifted_data, axis = 1)
             return df
@@ -150,8 +171,12 @@ def make_features_distances_shifted(df):
 
     return features_df, reversemap, feature_set_name
 
-@shift_features(window_size=5, n_shifts=3)
-def _compute_centroid(df, name, body_parts = bodypart_ids):
+###########################
+## MARS feature creation ##
+###########################
+
+@augment_features(window_size=5, n_shifts=3, mode = 'shift')
+def _compute_centroid(df, name, body_parts = bodypart_ids, n_shifts = 3, mode = 'shift'):
     df = df.copy()
     for mouse_id in mouse_ids:
         part_names_x = [f'{mouse_id}_x_{i}' for i in body_parts]
@@ -160,8 +185,8 @@ def _compute_centroid(df, name, body_parts = bodypart_ids):
         df[f'centroid_{name}_{mouse_id}_y'] = np.mean(df[part_names_y], axis = 1)
     return df
 
-@shift_features(window_size=5, n_shifts=3)
-def _compute_abs_angle(df, name, bps, centroid = True):
+@augment_features(window_size=5, n_shifts=3, mode = 'shift')
+def _compute_abs_angle(df, name, bps, centroid = True, n_shifts = 3, mode = 'shift'):
     df = df.copy()
     if len(bps) != 2:
         raise ValueError('Abs angle only works between 2 bodyparts, too many or too few specified')
@@ -175,8 +200,8 @@ def _compute_abs_angle(df, name, bps, centroid = True):
         df[f'angle_{name}_{mouse_id}'] = np.arctan2(diff_y,diff_x)  
     return df
 
-@shift_features(window_size=5, n_shifts=3)
-def _compute_rel_angle(df, name, bps, centroid = False):
+@augment_features(window_size=5, n_shifts=3, mode = 'shift')
+def _compute_rel_angle(df, name, bps, centroid = False, n_shifts = 3, mode = 'shift'):
     df = df.copy()
     if len(bps) != 3:
         raise ValueError('too many body parts to compute an absolute angle. Only works for 2')
@@ -198,8 +223,8 @@ def _compute_rel_angle(df, name, bps, centroid = False):
         df[f'angle_{name}_{mouse_id}'] = np.arccos(cosine_angle)
     return df
 
-@shift_features(window_size=5, n_shifts=3)
-def _compute_ellipsoid(df):
+@augment_features(window_size=5, n_shifts=3, mode = 'shift')
+def _compute_ellipsoid(df, n_shifts = 3, mode = 'shift'):
     df = df.copy()
     #Perform SVD
     colnames = ['_'.join([a[0], a[2], a[1]]) for a in product(mouse_ids, bodypart_ids, xy_ids)]
@@ -213,10 +238,18 @@ def _compute_ellipsoid(df):
     for idx,m_id in enumerate(mouse_ids):
         df[f'ellipse_major_{m_id}'] = evals[:,idx,0]
         df[f'ellipse_minor_{m_id}'] = evals[:,idx,1]
+        ## ratio of major and minor
+        df[f'ellipse_ratio_{m_id}'] = df[f'ellipse_minor_{m_id}']/df[f'ellipse_major_{m_id}']
+        ## area of ellipse
+        df[f'ellipse_area_{m_id}'] = df[f'ellipse_minor_{m_id}']*df[f'ellipse_major_{m_id}']
+
+    ## ratio of areas of ellipses of the mice
+    df[f'ellipse_area_ratio'] = df[f'ellipse_area_{mouse_ids[0]}']/df[f'ellipse_area_{mouse_ids[1]}']
+
     return df
 
 #Recall framerate is 30 fps
-def _compute_kinematics(df, names, window_size = 5):
+def _compute_kinematics(df, names, window_size = 5, n_shifts = 3):
     df = df.copy()
     for mouse_id in mouse_ids:
         for name in names:
@@ -232,8 +265,8 @@ def _compute_kinematics(df, names, window_size = 5):
             df[f'centroid_{name}_{mouse_id}_accel_y'] = ddy/(window_size**2)
     return df
 
-@shift_features(window_size=5, n_shifts=3)
-def _compute_relative_body_motions(df, window_size = 3):
+@augment_features(window_size=5, n_shifts=3, mode = 'shift')
+def _compute_relative_body_motions(df, window_size = 3, n_shifts = 3, mode = 'shift'):
 
     #Compute vector connecting two centroids
     dx = df[f'centroid_all_{mouse_ids[0]}_x'] - df[f'centroid_all_{mouse_ids[1]}_x']
@@ -258,8 +291,8 @@ def _compute_relative_body_motions(df, window_size = 3):
 
     return df
 
-@shift_features(window_size=5, n_shifts=3)
-def _compute_relative_body_angles(df):
+@augment_features(window_size=5, n_shifts=3, mode = 'shift')
+def _compute_relative_body_angles(df, n_shifts = 3, mode = 'shift'):
 
     for idx, m_id in enumerate(mouse_ids):
         #Compute vector connecting two centroids
@@ -287,8 +320,8 @@ def _compute_relative_body_angles(df):
 
     return df
     
-@shift_features(window_size=5, n_shifts=3)
-def _compute_iou(df):
+@augment_features(window_size=5, n_shifts=3, mode = 'shift')
+def _compute_iou(df, n_shifts = 3, mode = 'shift'):
 
     mins = {}
     maxs = {}
@@ -311,24 +344,11 @@ def _compute_iou(df):
     df['iou'] = iou
     return df
 
-def make_features_mars(df):
-
-    #MARS-inspired feature set to play with
-    feature_set_name = 'features_mars'
-
-    features_df = df.copy()
-
-    #######################
-    ## Position features ##
-    #######################
-    features_df = _compute_centroid(features_df, 'all')
-    features_df = _compute_centroid(features_df, 'head', ['nose', 'l_ear', 'r_ear', 'neck'])
-    features_df = _compute_centroid(features_df, 'hips', ['l_hip', 'tail_base', 'r_hip'])
-    features_df = _compute_centroid(features_df, 'body', ['neck', 'l_hip', 'r_hip', 'tail_base'])
-
-    ##Distance from centroid of the mouse to the closest vertical edge
-    ## and closest horizontal edge
-    ##Distance to the closest edge
+##Distance from centroid of the mouse to the closest vertical edge
+## and closest horizontal edge
+##Distance to the closest edge
+@augment_features(window_size=5, n_shifts=3, mode = 'shift')
+def _compute_cage_distances(features_df, n_shifts = 3, mode = 'shift'):
     for m_id in mouse_ids:
         features_df[f'centroid_all_{m_id}_x_inverted'] = 1024 - features_df[f'centroid_all_{m_id}_x']
         features_df[f'centroid_all_{m_id}_y_inverted'] = 570 - features_df[f'centroid_all_{m_id}_y']
@@ -336,24 +356,34 @@ def make_features_mars(df):
         features_df[f'{m_id}_closest_y'] = np.min(features_df[[f'centroid_all_{m_id}_y_inverted', f'centroid_all_{m_id}_y']], axis = 1)
         features_df[f'{m_id}_closest'] = np.min(features_df[[f'{m_id}_closest_x', f'{m_id}_closest_y']], axis = 1)
         features_df = features_df.drop(columns = [f'centroid_all_{m_id}_x_inverted', f'centroid_all_{m_id}_y_inverted'])
+    return features_df
+
+def make_features_mars(df, n_shifts = 3, mode = 'shift', feature_set_name = 'features_mars'):
+
+    features_df = df.copy()
+
+    #######################
+    ## Position features ##
+    #######################
+    features_df = _compute_centroid(features_df, 'all', n_shifts = n_shifts, mode = mode)
+    features_df = _compute_centroid(features_df, 'head', ['nose', 'l_ear', 'r_ear', 'neck'], n_shifts = n_shifts, mode = mode)
+    features_df = _compute_centroid(features_df, 'hips', ['l_hip', 'tail_base', 'r_hip'], n_shifts = n_shifts, mode = mode)
+    features_df = _compute_centroid(features_df, 'body', ['neck', 'l_hip', 'r_hip', 'tail_base'], n_shifts = n_shifts, mode = mode)
+
+    features_df = _compute_cage_distances(features_df, n_shifts = n_shifts, mode = mode)
 
     #####################
     #Appearance features#
     #####################
 
     ## absolute orientation of mice
-    features_df = _compute_abs_angle(features_df, 'head_hips', ['centroid_head', 'centroid_hips'])
-    features_df = _compute_abs_angle(features_df, 'head_nose', ['neck', 'nose'], centroid = False)
-    features_df = _compute_abs_angle(features_df, 'tail_neck', ['tail_base', 'neck'], centroid = False)
+    features_df = _compute_abs_angle(features_df, 'head_hips', ['centroid_head', 'centroid_hips'], n_shifts = n_shifts, mode = mode)
+    features_df = _compute_abs_angle(features_df, 'head_nose', ['neck', 'nose'], centroid = False, n_shifts = n_shifts, mode = mode)
+    features_df = _compute_abs_angle(features_df, 'tail_neck', ['tail_base', 'neck'], centroid = False, n_shifts = n_shifts, mode = mode)
     ## relative orientation of mice
-    features_df = _compute_rel_angle(features_df, 'l_ear_neck_r_ear', ['l_ear', 'neck', 'r_ear'])
+    features_df = _compute_rel_angle(features_df, 'l_ear_neck_r_ear', ['l_ear', 'neck', 'r_ear'], n_shifts = n_shifts, mode = mode)
     ## major axis len, minor axis len of ellipse fit to mouses body
-    features_df = _compute_ellipsoid(features_df)
-    for m_id in mouse_ids:
-        ## ratio of major and minor
-        features_df[f'ellipse_ratio_{m_id}'] = features_df[f'ellipse_minor_{m_id}']/features_df[f'ellipse_major_{m_id}']
-        ## area of ellipse
-        features_df[f'ellipse_area_{m_id}'] = features_df[f'ellipse_minor_{m_id}']*features_df[f'ellipse_major_{m_id}']
+    features_df = _compute_ellipsoid(features_df, n_shifts = n_shifts, mode = mode)
 
     #####################
     #Locomotion features#
@@ -365,17 +395,14 @@ def make_features_mars(df):
     #Social features#
     #################
 
-    features_df = _compute_relative_body_motions(features_df)
-    features_df = _compute_relative_body_angles(features_df)
+    features_df = _compute_relative_body_motions(features_df, n_shifts = n_shifts, mode = mode)
+    features_df = _compute_relative_body_angles(features_df, n_shifts = n_shifts, mode = mode)
 
     #Intersection of union of bounding boxes of two mice
-    features_df = _compute_iou(features_df)
-
-    ## ratio of areas of ellipses of the mice
-    features_df[f'ellipse_area_ratio'] = features_df[f'ellipse_area_{mouse_ids[0]}']/features_df[f'ellipse_area_{mouse_ids[1]}']
+    features_df = _compute_iou(features_df, n_shifts = n_shifts, mode = mode)
 
     ## distance between all pairs of keypoints of each mouse
-    features_df, _, _ = make_features_distances_shifted(features_df)
+    features_df, _, _ = make_features_distances(features_df)
 
     #Remove base features
     #features_df = features_df.drop(columns = colnames)
@@ -383,11 +410,17 @@ def make_features_mars(df):
     ##Clean up seq_id columns
     features_df, reversemap = boiler_plate(features_df)
 
-    return features_df, reversemap, feature_set_name    
+    return features_df, reversemap, feature_set_name
+
+make_features_mars_no_shift = lambda x: make_features_mars(x, n_shifts = 0)
+
+make_features_mars_diff = lambda x: make_features_mars(x, n_shifts = 3, mode = 'diff')
+
+make_features_mars_distr = lambda x: make_features_mars(x, n_shifts = 3, mode = 'distr')
 
 class Args(object):
     def __init__(self):
-        self.features = 'mars'
+        self.features = 'mars_dist'
         self.compute_test = False
 
 #Create a default set of parameters if we can't parse from the command line
@@ -399,7 +432,10 @@ def main(args):
     supported_features = {'differences': make_features_differences, 
                           'distances': make_features_distances, 
                           'distances_shifted': make_features_distances_shifted,
-                          'mars': make_features_mars}
+                          'mars': make_features_mars,
+                          'mars_no_shift': make_features_mars_no_shift, 
+                          'mars_diff': make_features_mars_diff,
+                          'mars_distr': make_features_mars_distr}
 
     if args.features not in supported_features:
         print("Features not found. Select one of", list(supported_features.keys()))
