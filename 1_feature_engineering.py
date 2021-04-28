@@ -5,7 +5,7 @@ import pandas as pd
 import numpy as np
 import argparse
 import pickle 
-from lib.helper import xy_ids, bodypart_ids, mouse_ids, colnames
+from mabetask1_ml.lib.helper import xy_ids, bodypart_ids, mouse_ids, colnames
 
 from itertools import product
 
@@ -34,10 +34,10 @@ def augment_features(window_size = 5, n_shifts = 3, mode = 'shift'):
                 mode = kwargs['mode']
             if 'n_shifts' in kwargs:
                 n_shifts = kwargs['n_shifts']
-            if n_shifts == 0: return args[0]
 
             old_cols = set(args[0].columns)
             df = feature_function(*args, **kwargs)
+            if n_shifts == 0: return df
             new_cols = set(df.columns)
             added_cols = list(new_cols.difference(old_cols))
             #Shift the features just made
@@ -69,10 +69,13 @@ def augment_features(window_size = 5, n_shifts = 3, mode = 'shift'):
     return decorator
 
 def boiler_plate(features_df):
-    hashmap = {k: i for (i,k) in enumerate(list(set(features_df['seq_id'])))}
-    reversemap = {i: k for (i,k) in enumerate(list(set(features_df['seq_id'])))}
-    features_df['seq_id_'] = [hashmap[i] for i in features_df['seq_id']]
-    features_df['seq_id'] = features_df['seq_id_']
+    reversemap = None
+    if 'seq_id' in features_df:
+        hashmap = {k: i for (i,k) in enumerate(list(set(features_df['seq_id'])))}
+        reversemap = {i: k for (i,k) in enumerate(list(set(features_df['seq_id'])))}
+        features_df['seq_id_'] = [hashmap[i] for i in features_df['seq_id']]
+        features_df['seq_id'] = features_df['seq_id_']
+
     to_drop = ['seq_id_', 'Unnamed: 0']
     for col in to_drop:
         if col in features_df.columns:
@@ -402,26 +405,54 @@ def make_features_mars(df, n_shifts = 3, mode = 'shift', feature_set_name = 'fea
     features_df = _compute_iou(features_df, n_shifts = n_shifts, mode = mode)
 
     ## distance between all pairs of keypoints of each mouse
-    features_df, _, _ = make_features_distances(features_df)
+    features_df, reversemap, _ = make_features_distances(features_df)
+
+    #Add the features from DL model
 
     #Remove base features
     #features_df = features_df.drop(columns = colnames)
 
     ##Clean up seq_id columns
-    features_df, reversemap = boiler_plate(features_df)
+    #features_df, _ = boiler_plate(features_df)
 
     return features_df, reversemap, feature_set_name
 
-make_features_mars_no_shift = lambda x: make_features_mars(x, n_shifts = 0)
+make_features_mars_no_shift = lambda x: make_features_mars(x, n_shifts = 0, feature_set_name = 'features_mars_no_shift')
 
-make_features_mars_diff = lambda x: make_features_mars(x, n_shifts = 3, mode = 'diff')
+make_features_mars_diff = lambda x: make_features_mars(x, n_shifts = 3, mode = 'diff', feature_set_name = 'features_mars_diff')
 
-make_features_mars_distr = lambda x: make_features_mars(x, n_shifts = 3, mode = 'distr')
+make_features_mars_distr = lambda x: make_features_mars(x, n_shifts = 3, mode = 'distr', feature_set_name = 'features_mars_distr')
+
+def make_features_mars_w_1dcnn_features(df, n_shifts = 3, mode = 'shift', feature_set_name = 'features_mars_distr_w_1dcnn',
+                                         fn_in = '/home/blansdel/projects/mabe/mabetask1/deep_learning_stacking_prediction_probabilities_baseline_test_run_distances.npy'):
+
+    features_df, reversemap, _ = make_features_mars_distr(df)
+    forwardmap = {i:k for k,i in reversemap.items()}
+
+    #Probabilities
+    all_pred_probs = np.load(fn_in, allow_pickle = True).item()
+    #Rewrite these keys
+    keys = list(all_pred_probs.keys())
+    for k in keys:
+        all_pred_probs[forwardmap[k]] = all_pred_probs[k]
+        del all_pred_probs[k]
+
+    new_cols = ['1dcnn_prob_0', '1dcnn_prob_1', '1dcnn_prob_2', '1dcnn_prob_3']
+
+    features_df[new_cols] = np.nan
+
+    for k,v in all_pred_probs.items():
+        features_df.loc[features_df['seq_id'] == k,new_cols] = v
+
+    return features_df, reversemap, feature_set_name
+
+make_features_mars_w_1dcnn_features_test = lambda x: make_features_mars_w_1dcnn_features(x, n_shifts = 3, mode = 'shift', feature_set_name = 'features_mars_distr_w_1dcnn',
+                                         fn_in = '/home/blansdel/projects/mabe/mabetask1/deep_learning_stacking_prediction_probabilities_test_baseline_test_run_distances.npy')
 
 class Args(object):
     def __init__(self):
-        self.features = 'mars_dist'
-        self.compute_test = False
+        self.features = 'mars_distr_1dcnn'
+        self.compute_test = True
 
 #Create a default set of parameters if we can't parse from the command line
 #i.e. we're running interactively in python
@@ -435,7 +466,9 @@ def main(args):
                           'mars': make_features_mars,
                           'mars_no_shift': make_features_mars_no_shift, 
                           'mars_diff': make_features_mars_diff,
-                          'mars_distr': make_features_mars_distr}
+                          'mars_distr': make_features_mars_distr,
+                          'mars_distr_1dcnn': make_features_mars_w_1dcnn_features,
+                          'mars_distr_1dcnn_test': make_features_mars_w_1dcnn_features_test}
 
     if args.features not in supported_features:
         print("Features not found. Select one of", list(supported_features.keys()))
@@ -443,13 +476,19 @@ def main(args):
 
     feature_maker = supported_features[args.features]
 
+    if args.features == 'mars_distr_1dcnn':
+        test_feature_maker = supported_features['mars_distr_1dcnn_test']
+
     train_df = pd.read_csv('./data/intermediate/train_df.csv')
     train_features, train_map, name = feature_maker(train_df)
     train_features.to_csv(f'./data/intermediate/train_{name}.csv', index = False)
 
     if args.compute_test:
         test_df = pd.read_csv('./data/intermediate/test_df.csv')
-        test_features, test_map, name = feature_maker(test_df)
+        if args.features == 'mars_distr_1dcnn':
+            test_features, test_map, name = test_feature_maker(test_df)
+        else:
+            test_features, test_map, name = feature_maker(test_df)    
         test_features.to_csv(f'./data/intermediate/test_{name}.csv', index = False)
         with open(f'./data/intermediate/test_map_{name}.pkl', 'wb') as handle:
             pickle.dump(test_map, handle, protocol=pickle.HIGHEST_PROTOCOL)

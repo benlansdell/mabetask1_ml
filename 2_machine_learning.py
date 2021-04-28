@@ -12,7 +12,8 @@ from collections import defaultdict
 import autosklearn.classification
 from sklearn.model_selection import GroupShuffleSplit, GroupKFold, KFold, GridSearchCV, \
                                     train_test_split, LeaveOneGroupOut, \
-                                    cross_validate, cross_val_predict
+                                    cross_validate, cross_val_predict, \
+                                    RandomizedSearchCV
 
 #Random forest
 from sklearn.decomposition import PCA
@@ -149,6 +150,73 @@ def run_askl(X_train, y_train, groups, params = None):
     askl.refit(X_train.copy(), y_train.copy())
     return askl, None
 
+from sklearn.model_selection import cross_val_score
+from sklearn.model_selection import RepeatedStratifiedKFold
+from sklearn.linear_model import LogisticRegression
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.svm import SVC
+from sklearn.naive_bayes import GaussianNB
+from sklearn.ensemble import StackingClassifier
+
+def run_stacking_sklearn(X_train, y_train, X_val, y_val, groups, params = None):
+    
+    #Since this uses CV, we'll combine training and validation data
+
+    cv_groups = GroupKFold(n_splits = 5)
+    scorer = sklearn.metrics.make_scorer(f1_score, labels = [0,1,2], average = 'macro')
+    xgb_params = {'learning_rate': 0.01}
+
+    #Create models
+    def get_stacking():
+        # define the base models
+        level0 = list()
+        #level0.append(('lr', LogisticRegression()))
+        #level0.append(('knn', KNeighborsClassifier()))
+        level0.append(('cart', DecisionTreeClassifier()))
+        level0.append(('svm', SVC()))
+        level0.append(('bayes', GaussianNB()))
+        level0.append(('rf', RandomForestClassifier(n_estimators = 10, criterion='entropy')))
+        #Add best parameters for this model here. Need to rerun random search :(
+        level0.append(('xgb', xgb.XGBClassifier(**xgb_params)))
+        # define meta learner model
+        level1 = LogisticRegression()
+        # define the stacking ensemble
+        model = StackingClassifier(estimators=level0, final_estimator=level1, cv=cv_groups)
+        return model
+    
+    # get a list of models to evaluate
+    def get_models():
+        models = dict()
+        models['rf'] = RandomForestClassifier(n_estimators = 10, criterion='entropy')
+        models['xgb'] = xgb.XGBClassifier(**xgb_params)
+        models['stacking'] = get_stacking()
+        return models
+        
+    # get the models to evaluate
+    models = get_models()
+    # evaluate the models and store results
+    train_results, val_results, names = list(), list(), list()
+    for name, model in models.items():
+
+        #Fit the model, 
+        print("Fitting", model)
+        model.fit(X_train, y_train, groups)
+        pred_train = model.predict(X_train)
+        pred_val = model.predict(X_val)
+        f1_train = f1_score(y_train, pred_train, average = 'macro', labels = [0,1,2])
+        f1_val = f1_score(y_val, pred_val, average = 'macro', labels = [0,1,2])
+
+        print("Training performance")
+        print(classification_report(y_train, pred_train))
+        print("Valdiation performance")
+        print(classification_report(y_val, pred_val))
+
+        train_results.append(f1_train)
+        val_results.append(f1_val)
+        names.append(name)
+
+
 def run_rf_cv_one_vs_all(X_train, y_train, X_val, y_val, groups, params = None, refit = False):
 
     #Setup default parameters
@@ -251,6 +319,46 @@ def run_xgb_cv(X_train, y_train, X_val, y_val, groups, params = None, refit = Fa
 
     return model, predict_proba_train, pred_train, predict_proba_val, pred_val
 
+def run_xgb_cv_randomsearch(X_train, y_train, X_val, y_val, groups, params = None, refit = False):
+
+    #Setup default parameters
+    if params is None:
+        params = {'learning_rate': 0.01, 'n_estimators': [10, 30, 100], 'criterion': ['gini', 'entropy']}
+
+    params = {
+            'min_child_weight': [1, 5, 10],
+            'max_depth': [3, 4, 5],
+            'gamma': [0.5, 1, 1.5, 2, 5],
+            'subsample': [0.6, 0.8, 1.0],
+            'colsample_bytree': [0.6, 0.8, 1.0]
+            }
+
+    model = xgb.XGBClassifier(**params)
+    print('Searching for best params with XGB model with CV')
+    cv_groups = GroupKFold(n_splits = 5)
+    
+    scorer = sklearn.metrics.make_scorer(f1_score, labels = [0,1,2], average = 'macro')
+
+    #Test:
+    #clf = RandomizedSearchCV(model, params, n_iter = 1, cv = cv_groups, verbose = 2, n_jobs = 5, scoring = scorer)
+
+    #Normal
+    clf = RandomizedSearchCV(model, params, n_iter = 30, cv = cv_groups, verbose = 2, n_jobs = 5, scoring = scorer)
+    clf.fit(X_train, y_train, groups)
+
+    pred_val = clf.predict(X_val)
+    predict_proba_val = clf.predict_proba(X_val)
+
+    pred_train = clf.predict(X_train)
+    predict_proba_train = clf.predict_proba(X_train)
+
+    return clf, predict_proba_train, pred_train, predict_proba_val, pred_val
+
+#TODO
+# Setup a separate search for each estimator
+# Combine these, along with the neural network and the rest of the raw featureset
+# 
+
 def run_rf(X_train, y_train, X_val, y_val, groups, params = None, refit = False):
 
     #Setup default parameters
@@ -312,14 +420,16 @@ def evaluate(y_train, pred_train, y_val = None, pred_val = None):
     if y_val is not None:
         print("Validation F1 score: (only for behavior labels)")
         print(f1_score(y_val, pred_val, labels = [0, 1, 2], average = 'macro'))
+        return f1_score(y_val, pred_val, labels = [0, 1, 2], average = 'macro')
+    return None
 
 class Args(object):
     def __init__(self):
-        self.features = 'distances'
-        self.model = 'rf'
+        self.features = 'mars_distr'
+        self.model = 'skl_stacking'
         self.submit = False
         self.parameterset = None
-        self.test = False
+        self.test = True
 
 args = Args()
 
@@ -329,7 +439,9 @@ def main(args):
                           'rf': run_rf,
                           'xgb': run_xgb,
                           'rf_cv': run_rf_cv,
-                          'xgb_cv': run_xgb_cv}
+                          'xgb_cv': run_xgb_cv, 
+                          'xgb_cv_search': run_xgb_cv_randomsearch,
+                          'skl_stacking': run_stacking_sklearn}
 
     if args.model not in supported_models:
         print("Model not found. Select one of", list(supported_models.keys()))
@@ -351,10 +463,6 @@ def main(args):
 
     sample_submission = np.load('data/sample_submission.npy',allow_pickle=True).item()
     
-    if args.test:
-        with open(f'data/intermediate/test_map_features_{args.features}.pkl', 'rb') as handle:
-            test_map = pickle.load(handle)
-
     X = train_features.drop(columns = ['annotation', 'seq_id'])
     y = train_features['annotation']
     groups = train_features['seq_id']
@@ -379,15 +487,26 @@ def main(args):
     model, pred_proba_train, pred_train, pred_proba_val, pred_val = \
                 run_model(X_train, y_train, X_val, y_val, groups_train, params)
 
-    evaluate(y_train, pred_train, y_val, pred_val)
+    if hasattr(model, 'best_params_'):
+        best_params = model.best_params_ 
+        search_results = model.cv_results_
+    else:
+        best_params = None
+        search_results = None
+
+    base_f1 = evaluate(y_train, pred_train, y_val, pred_val)
 
     #Can add HMM and reweighting here... based on training data, and based on predicted probabilities
 
     #Save training and validation predictions
-    fn_out = f"results/train_validation_{args.features}_ml_{args.model}_paramset_{args.parameterset}.pkl"
+    fn_out = f"results/train_validation_model_{args.features}_ml_{args.model}_paramset_{args.parameterset}.pkl"
     save_data = {'pred_train': pred_train, 'pred_val': pred_val, 'X_train': X_train, 
                  'y_train': y_train, 'groups_train': groups_train, 'X_val': X_val, 
                  'y_val': y_val, 'val_group': val_group}
+
+    if best_params:
+        save_data['best_params'] = best_params 
+        save_data['search_results'] = search_results
 
     with open(fn_out, 'wb') as handle:
         pickle.dump(save_data, handle, protocol=pickle.HIGHEST_PROTOCOL)
@@ -401,35 +520,60 @@ def main(args):
     hmm_pred = infer_hmm(hmm, np.array(pred_proba_train), np.array(pred_train), C)
     hmm_pred_val = infer_hmm(hmm, np.array(pred_proba_val), np.array(pred_val), C)
 
-    evaluate(y_train, hmm_pred, y_val, hmm_pred_val)
+    f1_hmm = evaluate(y_train, hmm_pred, y_val, hmm_pred_val)
 
     print("Reweighting for optimal F1 score")
     (w_star, f_star, train_pred_probs_reweighted, train_pred_reweighted, 
                 val_pred_probs_reweighted, val_pred_reweighted) = \
                     optimize_weights(y_train, pred_proba_train, pred_proba_val)
 
-    print(w_star, f_star)
     evaluate(y_train, train_pred_reweighted, y_val, val_pred_reweighted)
+    f1_optimal_weights = f_star
+
+    print("Applying HMM to reweighted model optimal F1 score")
+    hmm_reweighted = fit_hmm(np.array(y_train), np.array(train_pred_probs_reweighted), np.array(train_pred_reweighted), D, C)
+    hmm_pred_reweighted = infer_hmm(hmm_reweighted, np.array(train_pred_probs_reweighted), np.array(train_pred_reweighted), C)
+    hmm_pred_val_reweighted = infer_hmm(hmm_reweighted, np.array(val_pred_probs_reweighted), np.array(val_pred_reweighted), C)
+    f1_hmm_reweighted = evaluate(y_train, hmm_pred_reweighted, y_val, hmm_pred_val_reweighted)
+
+    #Decide on best model... based on the validation data? I guess so... still could be overfitting to this?
+    f1_scores = np.array([base_f1, f1_hmm, f1_optimal_weights, f1_hmm_reweighted])
+    f1_methods = ['base', 'hmm', 'reweighted', 'hmm_reweighted']
+    best_f1 = np.argmax(f1_scores)
+    print(f"Best validation F1 score of {np.max(f1_scores)} with: {f1_methods[best_f1]} method")
 
     if args.test:
+
+        with open(f'data/intermediate/test_map_features_{args.features}.pkl', 'rb') as handle:
+            test_map = pickle.load(handle)
+
         X_test = test_features.drop(columns = ['seq_id'])
         groups_test = test_features['seq_id']
 
         print("Predicting fit model on test data")
         predictions = model.predict(X_test)
+        predict_proba = model.predict_proba(X_test)
+
+        if best_f1 == 0:
+            final_predictions = predictions 
+        elif best_f1 == 1:
+            final_predictions = infer_hmm(hmm, np.array(predict_proba), np.array(predictions), C)
+        else:
+            test_pred_probs_reweighted = predict_proba*w_star
+            final_predictions = np.argmax(test_pred_probs_reweighted, axis = -1)
 
         print("Preparing submission")
         fn_out = f"results/submission_{args.features}_ml_{args.model}_paramset_{args.parameterset}.npy"
         submission = defaultdict(list)
-        for idx in range(len(predictions)):
-            submission[test_map[groups_test[idx]]].append(predictions[idx])
+        for idx in range(len(final_predictions)):
+            submission[test_map[groups_test[idx]]].append(final_predictions[idx])
         np.save(fn_out, submission)
 
         print("Validating submission")
         valid = validate_submission(submission, sample_submission)
         if not valid:
             print("Invalid submission format. Check submission.npy")
-            return 
+            #return 
         print("Submission validated.")
 
         #results/submission_features_differences_ml_rf.npy
@@ -443,5 +587,8 @@ def main(args):
             print(f"Submission not made. Can do so manually as follows:\n\naicrowd submission create -c mabe-task-1-classical-classification -f {fn_out}\n")
 
 if __name__ == "__main__":
-    args = parser.parse_args()
+    try:
+        args = parser.parse_args()
+    except SystemExit:
+        print("Cannot parse arguments. Resorting to the inbuilt defaults.")
     main(args)
