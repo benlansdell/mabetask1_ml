@@ -165,56 +165,39 @@ def run_stacking_sklearn(X_train, y_train, X_val, y_val, groups, params = None):
 
     cv_groups = GroupKFold(n_splits = 5)
     scorer = sklearn.metrics.make_scorer(f1_score, labels = [0,1,2], average = 'macro')
-    xgb_params = {'learning_rate': 0.01}
+    xgb_params = {'subsample': 0.6,
+        'min_child_weight': 1,
+        'max_depth': 3,
+        'gamma': 2,
+        'colsample_bytree': 1.0}
 
-    #Create models
-    def get_stacking():
-        # define the base models
-        level0 = list()
-        #level0.append(('lr', LogisticRegression()))
-        #level0.append(('knn', KNeighborsClassifier()))
-        level0.append(('cart', DecisionTreeClassifier()))
-        level0.append(('svm', SVC()))
-        level0.append(('bayes', GaussianNB()))
-        level0.append(('rf', RandomForestClassifier(n_estimators = 10, criterion='entropy')))
-        #Add best parameters for this model here. Need to rerun random search :(
-        level0.append(('xgb', xgb.XGBClassifier(**xgb_params)))
-        # define meta learner model
-        level1 = LogisticRegression()
-        # define the stacking ensemble
-        model = StackingClassifier(estimators=level0, final_estimator=level1, cv=cv_groups)
-        return model
-    
-    # get a list of models to evaluate
-    def get_models():
-        models = dict()
-        models['rf'] = RandomForestClassifier(n_estimators = 10, criterion='entropy')
-        models['xgb'] = xgb.XGBClassifier(**xgb_params)
-        models['stacking'] = get_stacking()
-        return models
-        
-    # get the models to evaluate
-    models = get_models()
-    # evaluate the models and store results
-    train_results, val_results, names = list(), list(), list()
-    for name, model in models.items():
+    # define the base models
+    level0 = list()
+    level0.append(('cart', DecisionTreeClassifier()))
+    level0.append(('svm', SVC()))
+    level0.append(('bayes', GaussianNB()))
+    level0.append(('rf', RandomForestClassifier(n_estimators = 25, criterion='entropy')))
+    #Add best parameters for this model here
+    level0.append(('xgb', xgb.XGBClassifier(**xgb_params)))
+    level0.append(('xgb_base', xgb.XGBClassifier()))
+    # define meta learner model
+    level1 = LogisticRegression()
+    # define the stacking ensemble
+    model = StackingClassifier(estimators=level0, final_estimator=level1, cv=cv_groups, n_jobs = 8)
+            
+    #Fit the model, 
+    print("Fitting", model)
+    model.fit(X_train, y_train, groups)
+    pred_train = model.predict(X_train)
+    predict_proba_train = model.predict_proba(X_train)
+    f1_train = f1_score(y_train, pred_train, average = 'macro', labels = [0,1,2])
+    predict_proba_val = []
+    pred_val = []
 
-        #Fit the model, 
-        print("Fitting", model)
-        model.fit(X_train, y_train, groups)
-        pred_train = model.predict(X_train)
-        pred_val = model.predict(X_val)
-        f1_train = f1_score(y_train, pred_train, average = 'macro', labels = [0,1,2])
-        f1_val = f1_score(y_val, pred_val, average = 'macro', labels = [0,1,2])
+    print("Training performance")
+    print(classification_report(y_train, pred_train))
 
-        print("Training performance")
-        print(classification_report(y_train, pred_train))
-        print("Valdiation performance")
-        print(classification_report(y_val, pred_val))
-
-        train_results.append(f1_train)
-        val_results.append(f1_val)
-        names.append(name)
+    return model, predict_proba_train, pred_train, predict_proba_val, pred_val
 
 
 def run_rf_cv_one_vs_all(X_train, y_train, X_val, y_val, groups, params = None, refit = False):
@@ -301,6 +284,20 @@ def run_xgb_cv(X_train, y_train, X_val, y_val, groups, params = None, refit = Fa
     if params is None:
         params = {}
         params['learning_rate'] = 0.01
+
+    #params = {'subsample': 0.8,
+    #    'min_child_weight': 10,
+    #    'max_depth': 4,
+    #    'gamma': 0.5,
+    #    'colsample_bytree': 0.8}
+
+    #Optimized from mars_distr_w_1dcnn random grid search below
+    params = {'subsample': 0.6,
+        'min_child_weight': 1,
+        'max_depth': 3,
+        'gamma': 2,
+        'colsample_bytree': 1.0}
+
 
     model = xgb.XGBClassifier(**params)
     print('Fitting XGB model with CV')
@@ -395,6 +392,12 @@ def run_xgb(X_train, y_train, X_val, y_val, groups, params = None, refit = False
         params = {}
         params['learning_rate'] = 0.01
 
+    params = {'subsample': 0.6,
+        'min_child_weight': 1,
+        'max_depth': 3,
+        'gamma': 2,
+        'colsample_bytree': 1.0}
+
     model = xgb.XGBClassifier(**params)
     print("Fitting XGB model")
     model.fit(X_train, y_train)
@@ -409,23 +412,23 @@ def run_xgb(X_train, y_train, X_val, y_val, groups, params = None, refit = False
 
     return model, pred_proba_train, pred_train, pred_proba_val, pred_val
 
-def evaluate(y_train, pred_train, y_val = None, pred_val = None):
+def evaluate(y_train, pred_train, y_val = [], pred_val = []):
     print("Performance on training data")
     print(classification_report(y_train, pred_train))
-    if y_val is not None:
+    if y_val:
         print("Performance on validation data")
         print(classification_report(y_val, pred_val))
     print("Training F1 score: (only for behavior labels)")
     print(f1_score(y_train, pred_train, labels = [0, 1, 2], average = 'macro'))
-    if y_val is not None:
+    if y_val:
         print("Validation F1 score: (only for behavior labels)")
         print(f1_score(y_val, pred_val, labels = [0, 1, 2], average = 'macro'))
         return f1_score(y_val, pred_val, labels = [0, 1, 2], average = 'macro')
-    return None
+    return 0
 
 class Args(object):
     def __init__(self):
-        self.features = 'mars_distr'
+        self.features = 'mars_distr_w_1dcnn'
         self.model = 'skl_stacking'
         self.submit = False
         self.parameterset = None
@@ -473,7 +476,7 @@ def main(args):
     #70 total training videos
     #Select 7 at random to be validation videos...
 
-    n_val_group = 7
+    n_val_group = 0
     val_group = np.random.choice(group_list, n_val_group)
 
     X_train = X[~train_features['seq_id'].isin(val_group)]
@@ -541,6 +544,10 @@ def main(args):
     f1_methods = ['base', 'hmm', 'reweighted', 'hmm_reweighted']
     best_f1 = np.argmax(f1_scores)
     print(f"Best validation F1 score of {np.max(f1_scores)} with: {f1_methods[best_f1]} method")
+
+    print('but, submitting baseline model here.')
+    #Maybe this helps a tiny bit???
+    best_f1 = 2
 
     if args.test:
 
