@@ -610,7 +610,7 @@ def main(args):
             pcts = pcts / np.sum(pcts)
             return pcts, f
 
-        w_star_test_opt, loss_star_test_opt, test_preds_test_opt = match_test_dist_weights(predict_proba)
+        #w_star_test_opt, loss_star_test_opt, test_preds_test_opt = match_test_dist_weights(predict_proba)
 
         #Out optimal weights:
         w_star_test_opt = np.array([2, 1, 2, 1])
