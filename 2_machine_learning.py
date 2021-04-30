@@ -19,7 +19,9 @@ from sklearn.model_selection import GroupShuffleSplit, GroupKFold, KFold, GridSe
 from sklearn.decomposition import PCA
 from sklearn.metrics import confusion_matrix, precision_score, recall_score, \
                             roc_auc_score, f1_score, accuracy_score, classification_report
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import RandomForestClassifier, ExtraTreesClassifier
+from sklearn.ensemble import StackingClassifier
+from sklearn.pipeline import Pipeline 
 
 #XGB
 import xgboost as xgb
@@ -158,36 +160,38 @@ from sklearn.tree import DecisionTreeClassifier
 from sklearn.svm import SVC
 from sklearn.naive_bayes import GaussianNB
 from sklearn.ensemble import StackingClassifier
+from sklearn.preprocessing import StandardScaler
 
 def run_stacking_sklearn(X_train, y_train, X_val, y_val, groups, params = None):
     
     #Since this uses CV, we'll combine training and validation data
 
-    cv_groups = GroupKFold(n_splits = 5)
+    cv_groups = GroupKFold_mod(n_splits = 5, groups = np.array(groups))
     scorer = sklearn.metrics.make_scorer(f1_score, labels = [0,1,2], average = 'macro')
     xgb_params = {'subsample': 0.6,
         'min_child_weight': 1,
         'max_depth': 3,
         'gamma': 2,
-        'colsample_bytree': 1.0}
+        'colsample_bytree': 1.0,
+        'n_jobs': 5}
 
     # define the base models
     level0 = list()
-    level0.append(('cart', DecisionTreeClassifier()))
-    level0.append(('svm', SVC()))
-    level0.append(('bayes', GaussianNB()))
-    level0.append(('rf', RandomForestClassifier(n_estimators = 25, criterion='entropy')))
+    level0.append(('rf_entropy', RandomForestClassifier(n_estimators = 25, criterion='entropy')))
+    level0.append(('rf_gini', RandomForestClassifier(n_estimators = 25, criterion='gini')))
+    level0.append(('et_entropy', ExtraTreesClassifier(n_estimators = 25, criterion='entropy', verbose = 1)))
+    level0.append(('et_gini', ExtraTreesClassifier(n_estimators = 25, criterion='gini', verbose = 1)))
     #Add best parameters for this model here
     level0.append(('xgb', xgb.XGBClassifier(**xgb_params)))
     level0.append(('xgb_base', xgb.XGBClassifier()))
     # define meta learner model
-    level1 = LogisticRegression()
+    level1 = LogisticRegression(verbose = 1, n_jobs = 10)
     # define the stacking ensemble
-    model = StackingClassifier(estimators=level0, final_estimator=level1, cv=cv_groups, n_jobs = 8)
+    model = StackingClassifier(estimators=level0, final_estimator=level1, cv=cv_groups, n_jobs = 8, verbose = 1)
             
     #Fit the model, 
     print("Fitting", model)
-    model.fit(X_train, y_train, groups)
+    model.fit(X_train, y_train)
     pred_train = model.predict(X_train)
     predict_proba_train = model.predict_proba(X_train)
     f1_train = f1_score(y_train, pred_train, average = 'macro', labels = [0,1,2])
@@ -198,7 +202,6 @@ def run_stacking_sklearn(X_train, y_train, X_val, y_val, groups, params = None):
     print(classification_report(y_train, pred_train))
 
     return model, predict_proba_train, pred_train, predict_proba_val, pred_val
-
 
 def run_rf_cv_one_vs_all(X_train, y_train, X_val, y_val, groups, params = None, refit = False):
 
@@ -291,6 +294,7 @@ def run_xgb_cv(X_train, y_train, X_val, y_val, groups, params = None, refit = Fa
     #    'gamma': 0.5,
     #    'colsample_bytree': 0.8}
 
+    #This is our 'winning' submission. Along with the reweighted HMM
     #Optimized from mars_distr_w_1dcnn random grid search below
     params = {'subsample': 0.6,
         'min_child_weight': 1,
@@ -330,7 +334,7 @@ def run_xgb_cv_randomsearch(X_train, y_train, X_val, y_val, groups, params = Non
             'colsample_bytree': [0.6, 0.8, 1.0]
             }
 
-    model = xgb.XGBClassifier(**params)
+    model = xgb.XGBClassifier(nthread = 70, **params)
     print('Searching for best params with XGB model with CV')
     cv_groups = GroupKFold(n_splits = 5)
     
@@ -350,11 +354,6 @@ def run_xgb_cv_randomsearch(X_train, y_train, X_val, y_val, groups, params = Non
     predict_proba_train = clf.predict_proba(X_train)
 
     return clf, predict_proba_train, pred_train, predict_proba_val, pred_val
-
-#TODO
-# Setup a separate search for each estimator
-# Combine these, along with the neural network and the rest of the raw featureset
-# 
 
 def run_rf(X_train, y_train, X_val, y_val, groups, params = None, refit = False):
 
@@ -392,10 +391,19 @@ def run_xgb(X_train, y_train, X_val, y_val, groups, params = None, refit = False
         params = {}
         params['learning_rate'] = 0.01
 
+    #Best for mars_distr_1dcnn
+    #params = {'subsample': 0.6,
+    #    'min_child_weight': 1,
+    #    'max_depth': 3,
+    #    'gamma': 2,
+    #    'colsample_bytree': 1.0}
+
+    #This is our 'winning' submission. Along with the reweighted HMM
+    #Optimized from mars_distr_w_1dcnn random grid search below
     params = {'subsample': 0.6,
         'min_child_weight': 1,
         'max_depth': 3,
-        'gamma': 2,
+        'gamma': 1.5,
         'colsample_bytree': 1.0}
 
     model = xgb.XGBClassifier(**params)
@@ -415,12 +423,12 @@ def run_xgb(X_train, y_train, X_val, y_val, groups, params = None, refit = False
 def evaluate(y_train, pred_train, y_val = [], pred_val = []):
     print("Performance on training data")
     print(classification_report(y_train, pred_train))
-    if y_val:
+    if len(y_val):
         print("Performance on validation data")
         print(classification_report(y_val, pred_val))
     print("Training F1 score: (only for behavior labels)")
     print(f1_score(y_train, pred_train, labels = [0, 1, 2], average = 'macro'))
-    if y_val:
+    if len(y_val):
         print("Validation F1 score: (only for behavior labels)")
         print(f1_score(y_val, pred_val, labels = [0, 1, 2], average = 'macro'))
         return f1_score(y_val, pred_val, labels = [0, 1, 2], average = 'macro')
@@ -428,8 +436,8 @@ def evaluate(y_train, pred_train, y_val = [], pred_val = []):
 
 class Args(object):
     def __init__(self):
-        self.features = 'mars_distr_w_1dcnn'
-        self.model = 'skl_stacking'
+        self.features = 'mars_distr_stacked_w_1dcnn'
+        self.model = 'xgb'
         self.submit = False
         self.parameterset = None
         self.test = True
@@ -515,7 +523,7 @@ def main(args):
         pickle.dump(save_data, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
     print("HMM optimization")
-    D = pred_proba_val.shape[1]
+    D = pred_proba_train.shape[1]
     C = 11
     lambdas = np.logspace(1, 30, 10)
 
@@ -547,7 +555,7 @@ def main(args):
 
     print('but, submitting baseline model here.')
     #Maybe this helps a tiny bit???
-    best_f1 = 2
+    best_f1 = 3
 
     if args.test:
 
@@ -561,13 +569,67 @@ def main(args):
         predictions = model.predict(X_test)
         predict_proba = model.predict_proba(X_test)
 
+        #Finally: we will reweight weights w not to max f1 score (though should check we don't reduce it too much...)
+        # so as to match the known test distribution of predictions
+        from collections import Counter
+        def match_test_dist_weights(predict_proba, N = 200):
+
+            def eval_weight(w):
+                target = np.array([0.04876, 0.23305, 0.12108, 0.59711])
+                counter = Counter(np.argmax((predict_proba*w), axis = -1))
+                pcts = np.array([counter[k] for k in range(4)])
+                pcts = pcts / np.sum(pcts)
+                diff = pcts - target
+                loss = np.sum(diff*diff)
+                return loss
+
+            w_star = np.ones(4)/4
+            loss_star = np.inf
+
+            for idx in range(N):
+                print(idx, loss_star, w_star)
+                w = sample_prob_simplex()
+                loss_curr = eval_weight(w)
+                if loss_curr < loss_star:
+                    w_star = w
+                    loss_star = loss_curr
+
+            new_test_preds = np.argmax(predict_proba*w_star, axis = -1)
+
+            return (w_star, loss_star, new_test_preds)
+
+        def eval_weights(predict_proba_test, predict_proba_train, w):
+
+            w = w / np.sum(w)
+
+            #Compute f1 score on training data
+            f = f1_score(y_train, np.argmax((predict_proba_train*w), axis = -1), average = 'macro', labels = [0,1,2])
+
+            counter = Counter(np.argmax((predict_proba_test*w), axis = -1))
+            pcts = np.array([counter[k] for k in range(4)])
+            pcts = pcts / np.sum(pcts)
+            return pcts, f
+
+        w_star_test_opt, loss_star_test_opt, test_preds_test_opt = match_test_dist_weights(predict_proba)
+
+        #Out optimal weights:
+        w_star_test_opt = np.array([2, 1, 2, 1])
+        w_star_test_opt = w_star_test_opt / np.sum(w_star_test_opt)
+        predictions_test_opt = np.argmax((predict_proba*w_star_test_opt), axis = -1)
+
+        final_predictions = predictions_test_opt 
+        
         if best_f1 == 0:
             final_predictions = predictions 
         elif best_f1 == 1:
             final_predictions = infer_hmm(hmm, np.array(predict_proba), np.array(predictions), C)
-        else:
+        elif best_f1 == 2:
             test_pred_probs_reweighted = predict_proba*w_star
             final_predictions = np.argmax(test_pred_probs_reweighted, axis = -1)
+        else:
+            test_pred_probs_reweighted = predict_proba*w_star
+            reweighted_predictions = np.argmax(test_pred_probs_reweighted, axis = -1)
+            final_predictions = infer_hmm(hmm_reweighted, np.array(test_pred_probs_reweighted), np.array(reweighted_predictions), C)
 
         print("Preparing submission")
         fn_out = f"results/submission_{args.features}_ml_{args.model}_paramset_{args.parameterset}.npy"
@@ -582,8 +644,6 @@ def main(args):
             print("Invalid submission format. Check submission.npy")
             #return 
         print("Submission validated.")
-
-        #results/submission_features_differences_ml_rf.npy
 
         if args.submit:
             login_cmd = f"aicrowd login --api-key {API_KEY}"
