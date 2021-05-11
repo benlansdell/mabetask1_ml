@@ -129,29 +129,6 @@ def optimize_weights(train_labels, train_pred_prob, val_pred_probs, N = 1000):
     return (w_star, f_star, train_pred_probs_reweighted, train_pred_reweighted, 
                 val_pred_probs_reweighted, val_pred_reweighted)
 
-def run_askl(X_train, y_train, groups, params = None):
-
-    raise NotImplementedError
-    #TODO
-    # How to get to run with n_jobs > 1?
-    os.system('rm -r ./tmp_askl')
-
-    askl = autosklearn.classification.AutoSklearnClassifier(
-        resampling_strategy = GroupShuffleSplit,
-        resampling_strategy_arguments = {'n_splits':5, 'test_size':7,
-                                        'groups': groups},
-        memory_limit = 100000,
-        n_jobs = 1, 
-        tmp_folder = './tmp_askl', 
-        time_left_for_this_task = 36000, 
-        seed = 5)
-
-    print('Fitting a set of models')
-    askl.fit(X_train, y_train)
-    print('Refitting with all data')
-    askl.refit(X_train.copy(), y_train.copy())
-    return askl, None
-
 from sklearn.model_selection import cross_val_score
 from sklearn.model_selection import RepeatedStratifiedKFold
 from sklearn.linear_model import LogisticRegression
@@ -161,125 +138,6 @@ from sklearn.svm import SVC
 from sklearn.naive_bayes import GaussianNB
 from sklearn.ensemble import StackingClassifier
 from sklearn.preprocessing import StandardScaler
-
-def run_stacking_sklearn(X_train, y_train, X_val, y_val, groups, params = None):
-    
-    #Since this uses CV, we'll combine training and validation data
-
-    cv_groups = GroupKFold_mod(n_splits = 5, groups = np.array(groups))
-    scorer = sklearn.metrics.make_scorer(f1_score, labels = [0,1,2], average = 'macro')
-    xgb_params = {'subsample': 0.6,
-        'min_child_weight': 1,
-        'max_depth': 3,
-        'gamma': 2,
-        'colsample_bytree': 1.0,
-        'n_jobs': 5}
-
-    # define the base models
-    level0 = list()
-    level0.append(('rf_entropy', RandomForestClassifier(n_estimators = 25, criterion='entropy')))
-    level0.append(('rf_gini', RandomForestClassifier(n_estimators = 25, criterion='gini')))
-    level0.append(('et_entropy', ExtraTreesClassifier(n_estimators = 25, criterion='entropy', verbose = 1)))
-    level0.append(('et_gini', ExtraTreesClassifier(n_estimators = 25, criterion='gini', verbose = 1)))
-    #Add best parameters for this model here
-    level0.append(('xgb', xgb.XGBClassifier(**xgb_params)))
-    level0.append(('xgb_base', xgb.XGBClassifier()))
-    # define meta learner model
-    level1 = LogisticRegression(verbose = 1, n_jobs = 10)
-    # define the stacking ensemble
-    model = StackingClassifier(estimators=level0, final_estimator=level1, cv=cv_groups, n_jobs = 8, verbose = 1)
-            
-    #Fit the model, 
-    print("Fitting", model)
-    model.fit(X_train, y_train)
-    pred_train = model.predict(X_train)
-    predict_proba_train = model.predict_proba(X_train)
-    f1_train = f1_score(y_train, pred_train, average = 'macro', labels = [0,1,2])
-    predict_proba_val = []
-    pred_val = []
-
-    print("Training performance")
-    print(classification_report(y_train, pred_train))
-
-    return model, predict_proba_train, pred_train, predict_proba_val, pred_val
-
-def run_rf_cv_one_vs_all(X_train, y_train, X_val, y_val, groups, params = None, refit = False):
-
-    #Setup default parameters
-    if params is None:
-        params = {}
-        params['n_estimators'] = 10
-        params['criterion'] = 'entropy'
-        #params['class_weight'] = 'balanced'
-
-    #Make random forest classifier, with group-level CV
-    model = RandomForestClassifier(**params)
-
-    print('Fitting random forest model with CV')
-    cv_groups = GroupKFold(n_splits = 5)
-
-    #One vs all: predict just one class at a time, then aggregate
-    predict_proba_train = []
-    predict_train_each_class_pred = []
-    for behavior in range(4):
-        pred_prob = cross_val_predict(model, X_train, y_train == behavior, 
-                                           groups = groups, cv = cv_groups,
-                                           n_jobs = 5, method = 'predict_proba')
-        predict_proba_train.append(pred_prob)
-        pred = np.argmax(pred_prob, axis = 1)
-        predict_train_each_class_pred.append(pred)
-        #Evaluate performance of each classifier on its own:
-        print(f'Performance of class {behavior} classifier (training)')
-        evaluate(y_train == behavior, pred)
-
-    #Combine them to form final prediction
-    predict_proba_train = np.vstack([i[:,1] for i in predict_proba_train]).T
-    pred_train = np.argmax(predict_proba_train, axis = 1)
-
-    #Compute validation predictions
-    predict_proba_val = []
-    predict_val_each_class_pred = []
-    for behavior in range(4):
-        model.fit(X_train, y_train == behavior)
-        pred_prob = model.predict_proba(X_val)
-        predict_proba_val.append(pred_prob)
-        pred = np.argmax(pred_prob, axis = 1)
-        predict_val_each_class_pred.append(pred)
-        #Evaluate performance of each classifier on its own:
-        print(f'Performance of class {behavior} classifier (validation)')
-        evaluate(y_val == behavior, pred)
-
-    predict_proba_val = np.vstack([i[:,1] for i in predict_proba_val]).T
-    pred_val = np.argmax(predict_proba_val, axis = 1)
-
-    return model, predict_proba_train, pred_train, predict_proba_val, pred_val
-
-def run_rf_cv(X_train, y_train, X_val, y_val, groups, params = None, refit = False):
-
-    #Setup default parameters
-    if params is None:
-        params = {}
-        params['n_estimators'] = 10
-        params['criterion'] = 'entropy'
-        #params['class_weight'] = 'balanced'
-
-    #Make random forest classifier, with group-level CV
-    model = RandomForestClassifier(**params)
-
-    print('Fitting random forest model with CV')
-    cv_groups = GroupKFold(n_splits = 5)
-    predict_proba_train = cross_val_predict(model, X_train, y_train, 
-                                           groups = groups, cv = cv_groups,
-                                           n_jobs = 5, method = 'predict_proba')
-
-    #Extract final prediction
-    pred_train = np.argmax(predict_proba_train, axis = 1)
-
-    model.fit(X_train, y_train)
-    predict_proba_val = model.predict_proba(X_val)
-    pred_val = np.argmax(predict_proba_val, axis = 1)
-
-    return model, predict_proba_train, pred_train, predict_proba_val, pred_val
 
 def run_xgb_cv(X_train, y_train, X_val, y_val, groups, params = None, refit = False):
 
@@ -355,35 +213,6 @@ def run_xgb_cv_randomsearch(X_train, y_train, X_val, y_val, groups, params = Non
 
     return clf, predict_proba_train, pred_train, predict_proba_val, pred_val
 
-def run_rf(X_train, y_train, X_val, y_val, groups, params = None, refit = False):
-
-    #Setup default parameters
-    if params is None:
-        params = {}
-        params['n_estimators'] = 10
-        params['criterion'] = 'entropy'
-        #params['class_weight'] = 'balanced'
-
-    #Make random forest classifier, with group-level CV
-    model = RandomForestClassifier(**params)
-
-    print('Fitting random forest model')
-    model.fit(X_train, y_train)
-
-    if refit:
-        print('Refitting with all data')
-        model.refit(X_train.copy(), y_train.copy())
-
-    #Compute proba
-    pred_proba_train = model.predict_proba(X_train)
-    pred_proba_val = model.predict_proba(X_val)
-
-    #Compute performance measures
-    pred_train = model.predict(X_train)
-    pred_val = model.predict(X_val)
-
-    return model, pred_proba_train, pred_train, pred_proba_val, pred_val
-
 def run_xgb(X_train, y_train, X_val, y_val, groups, params = None, refit = False):
 
     #Setup default parameters
@@ -399,7 +228,7 @@ def run_xgb(X_train, y_train, X_val, y_val, groups, params = None, refit = False
     #    'colsample_bytree': 1.0}
 
     #This is our 'winning' submission. Along with the reweighted HMM
-    #Optimized from mars_distr_w_1dcnn random grid search below
+    #Optimized from mars_distr_stacked_w_1dcnn random grid search below
     params = {'subsample': 0.6,
         'min_child_weight': 1,
         'max_depth': 3,
@@ -446,25 +275,15 @@ args = Args()
 
 def main(args):
 
-    supported_models = {'askl': run_askl, 
-                          'rf': run_rf,
-                          'xgb': run_xgb,
-                          'rf_cv': run_rf_cv,
+    supported_models = {'xgb': run_xgb,
                           'xgb_cv': run_xgb_cv, 
-                          'xgb_cv_search': run_xgb_cv_randomsearch,
-                          'skl_stacking': run_stacking_sklearn}
+                          'xgb_cv_search': run_xgb_cv_randomsearch}
 
     if args.model not in supported_models:
         print("Model not found. Select one of", list(supported_models.keys()))
         return
 
-    if args.parameterset == 'default':
-        params = None 
-    else:
-        #Load parameters from json file...
-        #TODO:
-        # Implement. For now, resort to default
-        params = None
+    params = None
 
     run_model = supported_models[args.model]
 
@@ -479,10 +298,6 @@ def main(args):
     groups = train_features['seq_id']
 
     group_list = np.array(pd.unique(groups))
-
-    #Split into train and validation by groups
-    #70 total training videos
-    #Select 7 at random to be validation videos...
 
     n_val_group = 0
     val_group = np.random.choice(group_list, n_val_group)

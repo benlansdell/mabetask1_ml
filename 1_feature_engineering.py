@@ -84,36 +84,6 @@ def boiler_plate(features_df):
     features_df = features_df.apply(lambda x: x.fillna(x.mean()), axis=0)
     return features_df, reversemap
 
-def make_features_differences(df):
-
-    feature_set_name = 'features_differences'
-
-    features_df = df.copy()
-
-    ##Make the features
-    for xy in xy_ids:
-        for i, bp1 in enumerate(bodypart_ids):
-            for j, bp2 in enumerate(bodypart_ids):
-                if i < j:
-                    for mouse_id in mouse_ids:
-                        #We can compute the intra-mouse difference
-                        f1 = '_'.join([mouse_id, xy, bp1])
-                        f2 = '_'.join([mouse_id, xy, bp2])
-                        f_new = '_'.join([mouse_id, xy, bp1, bp2])
-                        features_df[f_new] = features_df[f1] - features_df[f2]
-                #Inter-mouse difference
-                f1 = '_'.join([mouse_ids[0], xy, bp1])
-                f2 = '_'.join([mouse_ids[1], xy, bp2])
-                f_new = '_'.join(['M0_M1', xy, bp1, bp2])
-                features_df[f_new] = features_df[f1] - features_df[f2]
-    #Remove base features
-    features_df = features_df.drop(columns = colnames)
-
-    ##Clean up seq_id columns
-    features_df, reversemap = boiler_plate(features_df)
-
-    return features_df, reversemap, feature_set_name
-
 def make_features_distances(df):
 
     feature_set_name = 'features_distances'
@@ -151,32 +121,6 @@ def make_features_distances(df):
     features_df, reversemap = boiler_plate(features_df)
 
     return features_df, reversemap, feature_set_name
-
-def make_features_distances_shifted(df):
-
-    feature_set_name = 'features_distances_shifted'
-    features_df, reversemap, _ = make_features_distances(df)
-    #Now add shifts (just not of the )
-
-    if 'annotation' in features_df.columns: 
-        labels = features_df[['annotation', 'seq_id']]
-        the_rest = features_df.drop(columns = ['annotation', 'seq_id'])
-    else:
-        labels = features_df[['seq_id']]
-        the_rest = features_df.drop(columns = ['seq_id'])
-
-    periods = [-15, -10, -5, 5, 10, 15]
-    data = [labels] + [the_rest.shift(p) for p in periods] + [the_rest]
-    features_df = pd.concat(data, axis = 1)
-
-    #Impute NAs
-    features_df = features_df.apply(lambda x: x.fillna(x.mean()), axis=0)
-
-    return features_df, reversemap, feature_set_name
-
-###########################
-## MARS feature creation ##
-###########################
 
 @augment_features(window_size=5, n_shifts=3, mode = 'shift')
 def _compute_centroid(df, name, body_parts = bodypart_ids, n_shifts = 3, mode = 'shift'):

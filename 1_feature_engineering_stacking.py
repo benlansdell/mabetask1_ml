@@ -11,22 +11,6 @@ from itertools import product
 
 from sklearn.impute import SimpleImputer
 
-def boiler_plate(features_df):
-    reversemap = None
-    if 'seq_id' in features_df:
-        hashmap = {k: i for (i,k) in enumerate(list(set(features_df['seq_id'])))}
-        reversemap = {i: k for (i,k) in enumerate(list(set(features_df['seq_id'])))}
-        features_df['seq_id_'] = [hashmap[i] for i in features_df['seq_id']]
-        features_df['seq_id'] = features_df['seq_id_']
-
-    to_drop = ['seq_id_', 'Unnamed: 0']
-    for col in to_drop:
-        if col in features_df.columns:
-            features_df = features_df.drop(columns = col)
-    #Impute nas
-    features_df = features_df.apply(lambda x: x.fillna(x.mean()), axis=0)
-    return features_df, reversemap
-
 import sklearn.metrics 
 from sklearn.model_selection import GroupKFold
 from sklearn.metrics import f1_score
