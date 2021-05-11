@@ -1,6 +1,3 @@
-#Feature engineering:
-# Difference between each body part
-
 import pandas as pd 
 import numpy as np
 import argparse
@@ -24,6 +21,8 @@ from sklearn.ensemble import StackingClassifier
 from sklearn.pipeline import Pipeline 
 from sklearn.preprocessing import StandardScaler
 
+from feature_engineering import make_features_mars_w_1dcnn_features, make_features_mars_w_1dcnn_features_test
+
 def make_stacked_features(train_df, test_df):
 
     mars_features_df, reversemap, _ = make_features_mars_w_1dcnn_features(train_df)
@@ -32,7 +31,6 @@ def make_stacked_features(train_df, test_df):
     name = 'features_mars_distr_stacked_w_1dcnn'
     
     n_folds = 5
-    #Extract data from train_df
 
     X = mars_features_df.drop(columns = ['annotation', 'seq_id'])
     y = mars_features_df['annotation']
@@ -86,11 +84,6 @@ def make_stacked_features(train_df, test_df):
 
     # Once done, concat predictions to make train data for XGB. 
     # And run the inference with the mean of each model to make the test data
-
-    #for abm in all_base_models:
-    #    for m in abm:
-    #        model = m[1]
-    #        m[3] = model.predict_proba(X_test)
 
     all_val_preds = []
     all_test_preds = {}
@@ -152,8 +145,6 @@ def make_stacked_features(train_df, test_df):
 
     return mars_features_df, reversemap, name, mars_features_df_test, reversemap_test
 
-
-
 def main():
 
     # Load in MARS distr train and test features
@@ -164,13 +155,13 @@ def main():
     test_df = pd.read_csv('./data/intermediate/test_df.csv')
 
     #Make features
-    train_features, train_map, name, test_features, test_map = make_stacked_features(train_df, test_df)
+    train_features, _, name, test_features, test_map = make_stacked_features(train_df, test_df)
 
     #Save
-    #train_features.to_csv(f'./data/intermediate/train_{name}.csv', index = False)
-    #test_features.to_csv(f'./data/intermediate/test_{name}.csv', index = False)
-    #with open(f'./data/intermediate/test_map_{name}.pkl', 'wb') as handle:
-    #    pickle.dump(test_map, handle, protocol=pickle.HIGHEST_PROTOCOL)
+    train_features.to_csv(f'./data/intermediate/train_{name}.csv', index = False)
+    test_features.to_csv(f'./data/intermediate/test_{name}.csv', index = False)
+    with open(f'./data/intermediate/test_map_{name}.pkl', 'wb') as handle:
+        pickle.dump(test_map, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
 if __name__ == "__main__":
     main()

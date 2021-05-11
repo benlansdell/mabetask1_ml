@@ -1,25 +1,16 @@
-#Feature engineering:
-# Difference between each body part
-
 import pandas as pd 
 import numpy as np
-import argparse
 import pickle 
-from mabetask1_ml.lib.helper import xy_ids, bodypart_ids, mouse_ids, colnames
+from lib.helper import xy_ids, bodypart_ids, mouse_ids, colnames
 
 from itertools import product
 
 from sklearn.impute import SimpleImputer
 
-#The test data is time consuming to featurize...
-
-parser = argparse.ArgumentParser() 
-parser.add_argument('features', type = str)
-parser.add_argument('--compute_test', action = 'store_true')
-
 #Shift decorator
 #If a feature creation function has this applied then the features are
-#automatically shifted and concatenated with the rest of the table
+#automatically shifted/differences/had distribution stats computed and
+#concatenated with the rest of the table
 
 #The decorator maker, so we can provide arguments
 def augment_features(window_size = 5, n_shifts = 3, mode = 'shift'):
@@ -122,7 +113,7 @@ def make_features_distances(df):
 
     return features_df, reversemap, feature_set_name
 
-@augment_features(window_size=5, n_shifts=3, mode = 'shift')
+@augment_features()
 def _compute_centroid(df, name, body_parts = bodypart_ids, n_shifts = 3, mode = 'shift'):
     df = df.copy()
     for mouse_id in mouse_ids:
@@ -132,7 +123,7 @@ def _compute_centroid(df, name, body_parts = bodypart_ids, n_shifts = 3, mode = 
         df[f'centroid_{name}_{mouse_id}_y'] = np.mean(df[part_names_y], axis = 1)
     return df
 
-@augment_features(window_size=5, n_shifts=3, mode = 'shift')
+@augment_features()
 def _compute_abs_angle(df, name, bps, centroid = True, n_shifts = 3, mode = 'shift'):
     df = df.copy()
     if len(bps) != 2:
@@ -147,7 +138,7 @@ def _compute_abs_angle(df, name, bps, centroid = True, n_shifts = 3, mode = 'shi
         df[f'angle_{name}_{mouse_id}'] = np.arctan2(diff_y,diff_x)  
     return df
 
-@augment_features(window_size=5, n_shifts=3, mode = 'shift')
+@augment_features()
 def _compute_rel_angle(df, name, bps, centroid = False, n_shifts = 3, mode = 'shift'):
     df = df.copy()
     if len(bps) != 3:
@@ -170,7 +161,7 @@ def _compute_rel_angle(df, name, bps, centroid = False, n_shifts = 3, mode = 'sh
         df[f'angle_{name}_{mouse_id}'] = np.arccos(cosine_angle)
     return df
 
-@augment_features(window_size=5, n_shifts=3, mode = 'shift')
+@augment_features()
 def _compute_ellipsoid(df, n_shifts = 3, mode = 'shift'):
     df = df.copy()
     #Perform SVD
@@ -212,7 +203,7 @@ def _compute_kinematics(df, names, window_size = 5, n_shifts = 3):
             df[f'centroid_{name}_{mouse_id}_accel_y'] = ddy/(window_size**2)
     return df
 
-@augment_features(window_size=5, n_shifts=3, mode = 'shift')
+@augment_features()
 def _compute_relative_body_motions(df, window_size = 3, n_shifts = 3, mode = 'shift'):
 
     #Compute vector connecting two centroids
@@ -238,7 +229,7 @@ def _compute_relative_body_motions(df, window_size = 3, n_shifts = 3, mode = 'sh
 
     return df
 
-@augment_features(window_size=5, n_shifts=3, mode = 'shift')
+@augment_features()
 def _compute_relative_body_angles(df, n_shifts = 3, mode = 'shift'):
 
     for idx, m_id in enumerate(mouse_ids):
@@ -267,7 +258,7 @@ def _compute_relative_body_angles(df, n_shifts = 3, mode = 'shift'):
 
     return df
     
-@augment_features(window_size=5, n_shifts=3, mode = 'shift')
+@augment_features()
 def _compute_iou(df, n_shifts = 3, mode = 'shift'):
 
     mins = {}
@@ -294,7 +285,7 @@ def _compute_iou(df, n_shifts = 3, mode = 'shift'):
 ##Distance from centroid of the mouse to the closest vertical edge
 ## and closest horizontal edge
 ##Distance to the closest edge
-@augment_features(window_size=5, n_shifts=3, mode = 'shift')
+@augment_features()
 def _compute_cage_distances(features_df, n_shifts = 3, mode = 'shift'):
     for m_id in mouse_ids:
         features_df[f'centroid_all_{m_id}_x_inverted'] = 1024 - features_df[f'centroid_all_{m_id}_x']
@@ -351,24 +342,13 @@ def make_features_mars(df, n_shifts = 3, mode = 'shift', feature_set_name = 'fea
     ## distance between all pairs of keypoints of each mouse
     features_df, reversemap, _ = make_features_distances(features_df)
 
-    #Add the features from DL model
-
-    #Remove base features
-    #features_df = features_df.drop(columns = colnames)
-
-    ##Clean up seq_id columns
-    #features_df, _ = boiler_plate(features_df)
-
     return features_df, reversemap, feature_set_name
-
-make_features_mars_no_shift = lambda x: make_features_mars(x, n_shifts = 0, feature_set_name = 'features_mars_no_shift')
-
-make_features_mars_diff = lambda x: make_features_mars(x, n_shifts = 3, mode = 'diff', feature_set_name = 'features_mars_diff')
 
 make_features_mars_distr = lambda x: make_features_mars(x, n_shifts = 3, mode = 'distr', feature_set_name = 'features_mars_distr')
 
-def make_features_mars_w_1dcnn_features(df, n_shifts = 3, mode = 'shift', feature_set_name = 'features_mars_distr_w_1dcnn',
-                                         fn_in = '/home/blansdel/projects/mabe/mabetask1/deep_learning_stacking_prediction_probabilities_baseline_test_run_distances.npy'):
+def make_features_mars_w_1dcnn_features(df, n_shifts = 3, mode = 'shift', 
+                                         feature_set_name = 'features_mars_distr_w_1dcnn',
+                                         fn_in = './deep_learning_stacking_prediction_probabilities_baseline_test_run_distances.npy'):
 
     features_df, reversemap, _ = make_features_mars_distr(df)
     forwardmap = {i:k for k,i in reversemap.items()}
@@ -391,58 +371,4 @@ def make_features_mars_w_1dcnn_features(df, n_shifts = 3, mode = 'shift', featur
     return features_df, reversemap, feature_set_name
 
 make_features_mars_w_1dcnn_features_test = lambda x: make_features_mars_w_1dcnn_features(x, n_shifts = 3, mode = 'shift', feature_set_name = 'features_mars_distr_w_1dcnn',
-                                         fn_in = '/home/blansdel/projects/mabe/mabetask1/deep_learning_stacking_prediction_probabilities_test_baseline_test_run_distances.npy')
-
-
-class Args(object):
-    def __init__(self):
-        self.features = 'mars_distr_1dcnn'
-        self.compute_test = True
-
-#Create a default set of parameters if we can't parse from the command line
-#i.e. we're running interactively in python
-args = Args()
-
-def main(args):
-
-    supported_features = {'differences': make_features_differences, 
-                          'distances': make_features_distances, 
-                          'distances_shifted': make_features_distances_shifted,
-                          'mars': make_features_mars,
-                          'mars_no_shift': make_features_mars_no_shift, 
-                          'mars_diff': make_features_mars_diff,
-                          'mars_distr': make_features_mars_distr,
-                          'mars_distr_1dcnn': make_features_mars_w_1dcnn_features,
-                          'mars_distr_1dcnn_test': make_features_mars_w_1dcnn_features_test}
-
-    if args.features not in supported_features:
-        print("Features not found. Select one of", list(supported_features.keys()))
-        return
-
-    feature_maker = supported_features[args.features]
-
-    if args.features == 'mars_distr_1dcnn':
-        test_feature_maker = supported_features['mars_distr_1dcnn_test']
-
-    train_df = pd.read_csv('./data/intermediate/train_df.csv')
-    train_features, train_map, name = feature_maker(train_df)
-    train_features.to_csv(f'./data/intermediate/train_{name}.csv', index = False)
-
-    if args.compute_test:
-        test_df = pd.read_csv('./data/intermediate/test_df.csv')
-        if args.features == 'mars_distr_1dcnn':
-            test_features, test_map, name = test_feature_maker(test_df)
-        else:
-            test_features, test_map, name = feature_maker(test_df)    
-        test_features.to_csv(f'./data/intermediate/test_{name}.csv', index = False)
-        with open(f'./data/intermediate/test_map_{name}.pkl', 'wb') as handle:
-            pickle.dump(test_map, handle, protocol=pickle.HIGHEST_PROTOCOL)
-
-if __name__ == "__main__":
-
-    try:
-        args = parser.parse_args()
-    except SystemExit:
-        print("Cannot parse arguments. Resorting to the inbuilt defaults.")
-
-    main(args)
+                                         fn_in = './deep_learning_stacking_prediction_probabilities_test_baseline_test_run_distances.npy')

@@ -1,0 +1,594 @@
+#!/usr/bin/env python3
+import numpy as np
+import os
+import argparse
+import time 
+import json 
+import pickle 
+
+from tensorflow import keras
+import tensorflow as tf
+from keras.models import Sequential
+import keras.layers as layers
+import keras.models as models
+import tensorflow_addons as tfa
+from keras.callbacks import LearningRateScheduler
+
+import pandas as pd
+from sklearn.model_selection import train_test_split, KFold
+from sklearn.metrics import f1_score
+from copy import deepcopy
+import tqdm
+
+from lib.utils import seed_everything, validate_submission
+from lib.helper import API_KEY
+from fscores import macroF1
+
+###############
+## DL models ##
+###############
+
+from dl_models import build_baseline_model
+
+###################
+## DL generators ##
+###################
+
+from dl_generators import MABe_Generator, features_mars_distr
+
+###################
+## Grid searches ##
+###################
+
+from grid_searches import sweeps_baseline
+
+path = '.'
+
+seed_everything()
+  
+#Implement cross validation, instead of a single validation set
+#Product predictions on the held out data, all merged into one frame
+class Trainer:
+    def __init__(self, *,
+               pose_dictionary,
+               splitter,
+               anno_df,
+               feature_dim, 
+               batch_size, 
+               num_classes,
+               test_data = None,
+               augment=False,
+               class_to_number=None,
+               past_frames=0, 
+               future_frames=0,
+               frame_gap=1, 
+               use_conv=False, 
+               build_model = build_baseline_model,
+               Generator = MABe_Generator,
+               use_callbacks = False,
+               learning_decay_freq = 10,
+               featurizer = features_identity):
+
+        flat_dim = np.prod(feature_dim)
+        if use_conv:
+            input_dim = ((past_frames + future_frames + 1), flat_dim,)
+        else:
+            input_dim = (flat_dim * (past_frames + future_frames + 1),)
+
+        self.learning_decay_freq = learning_decay_freq
+        self.input_dim = input_dim
+        self.use_conv=use_conv
+        self.num_classes=num_classes
+        self.build_model = build_model 
+        self.use_callbacks = use_callbacks
+
+        c2n = {'other': 0,'investigation': 1,
+                    'attack' : 2, 'mount' : 3}
+        self.class_to_number = class_to_number or c2n
+
+        #Create a generator for each fold:
+        self.train_generators = []
+        self.val_generators_train = []
+        self.val_generators_predict = []
+        self.val_indices = []
+
+        #Make the base generators for retraining on all data:
+        self.train_generator_all = Generator(pose_dictionary, 
+                                        batch_size=batch_size, 
+                                        dim=input_dim,
+                                        num_classes=num_classes, 
+                                        past_frames=past_frames, 
+                                        future_frames=future_frames,
+                                        class_to_number=self.class_to_number,
+                                        use_conv=use_conv,
+                                        frame_gap=frame_gap,
+                                        augment=augment,
+                                        shuffle=True,
+                                        mode='fit',
+                                        featurize = featurizer) 
+
+        if test_data is not None:
+            self.test_generator = Generator(test_data, 
+                                    batch_size=8192, 
+                                    dim=input_dim, 
+                                    num_classes=num_classes, 
+                                    past_frames=past_frames,
+                                    future_frames=future_frames,
+                                    use_conv=use_conv,
+                                    class_to_number=self.class_to_number,
+                                    frame_gap=frame_gap,
+                                    augment=False,
+                                    shuffle=False,
+                                    mode='predict',
+                                    featurize = featurizer)
+
+        #CV folds to define training and validation generators
+        for idx_train, idx_val in splitter.split(anno_df.index):
+
+            #Need to save these 
+            self.val_indices.append(idx_val)
+            #Create appropriate split (Using sklearn function?)
+            train_data = {k : pose_dictionary[k] for k in anno_df.index[idx_train]}
+            val_data = {k : pose_dictionary[k] for k in anno_df.index[idx_val]}
+
+            #Append a generator with that data
+            self.train_generators.append(
+                                        Generator(train_data, 
+                                            batch_size=batch_size, 
+                                            dim=input_dim,
+                                            num_classes=num_classes, 
+                                            past_frames=past_frames, 
+                                            future_frames=future_frames,
+                                            class_to_number=self.class_to_number,
+                                            use_conv=use_conv,
+                                            frame_gap=frame_gap,
+                                            augment=augment,
+                                            shuffle=True,
+                                            mode='fit',
+                                            featurize = featurizer)
+                                        )   
+
+            self.val_generators_train.append(
+                                        Generator(val_data, 
+                                            batch_size=batch_size, 
+                                            dim=input_dim, 
+                                            num_classes=num_classes, 
+                                            past_frames=past_frames,
+                                            future_frames=future_frames,
+                                            use_conv=use_conv,
+                                            class_to_number=self.class_to_number,
+                                            frame_gap=frame_gap,
+                                            augment=False,
+                                            shuffle=False,
+                                            mode='fit',
+                                            featurize = featurizer)
+                                    )
+  
+            self.val_generators_predict.append(
+                                        Generator(val_data, 
+                                            batch_size=batch_size, 
+                                            dim=input_dim, 
+                                            num_classes=num_classes, 
+                                            past_frames=past_frames,
+                                            future_frames=future_frames,
+                                            use_conv=use_conv,
+                                            class_to_number=self.class_to_number,
+                                            frame_gap=frame_gap,
+                                            augment=False,
+                                            shuffle=False,
+                                            mode='predict',
+                                            featurize = featurizer)
+                                    )
+
+    def delete_model(self):
+        self.model = None
+
+    def initialize_model(self, **kwargs):
+        self.model = self.build_model(input_dim = self.input_dim, **kwargs)
+
+    def _set_model(self, model):
+        """ Set an external, provide initialized and compiled keras model """
+        self.model = model
+
+    def train(self, model_params, epochs=20, class_weight=None, steps_per_epoch = None, tune_callbacks = True):
+
+        kwargs = {}
+        if class_weight is not None:
+            if type(class_weight) is dict:
+                kwargs['class_weight'] = class_weight
+
+        callbacks = [LearningRateScheduler(lambda x,y: lrs(x,y,self.learning_decay_freq))]
+
+        if self.val_generators_train:
+            unet_loss_dict = {"train_loss": "loss", "val_loss": "val_loss"}
+            loss_dict = {"train_accuracy": "accuracy",
+                        "train_f1":"f1_score", "val_accuracy": "val_accuracy", "val_f1": "val_f1_score"}
+        else:
+            unet_loss_dict = {"train_loss": "loss"}
+            loss_dict = {"train_accuracy": "accuracy", "train_f1":"f1_score"}
+
+        if self.use_callbacks:
+            callbacks += [macroF1(self.model, self.val_inputs, self.val_targets)]
+
+        num_classes = 4
+        n_folds = len(self.train_generators)
+
+        all_val_preds = {}
+        all_val_pred_probs = {}
+        all_test_pred_probs = {}
+
+        #Repeat this fit process:
+        for tg, vg_train, vg_predict, iv in zip(self.train_generators, self.val_generators_train, self.val_generators_predict, self.val_indices):
+
+            #Reinit model to start training again
+            self.initialize_model(**model_params)
+
+            #Train model
+            self.model.fit(tg,
+                validation_data=vg_train,
+                epochs=epochs,
+                steps_per_epoch = steps_per_epoch,
+                callbacks = callbacks,
+                **kwargs)
+
+
+            #For each validation video:
+            def get_val_predictions(all_val_preds, all_val_pred_probs):
+                for vkey in vg_predict.video_keys:
+                    nframes = vg_predict.seq_lengths[vkey]
+                    all_val_preds[vkey] = np.zeros(nframes, dtype=np.int32)
+                    all_val_pred_probs[vkey] = np.zeros((nframes, num_classes), dtype=np.float32)
+
+                for X, vkey_fi_list in tqdm.tqdm(vg_predict):
+                    val_pred_prob = self.model.predict(X)
+                    val_pred = np.argmax(val_pred_prob, axis=-1)
+
+                    for idx in range(len(val_pred)):
+                        pr = val_pred_prob[idx,:]
+                        (vkey, fi) = vkey_fi_list[idx]
+                        all_val_pred_probs[vkey][fi] = pr                        
+
+                    for p, (vkey, fi) in zip(val_pred, vkey_fi_list):
+                        all_val_preds[vkey][fi] = p
+
+            #Predict on validation data
+            get_val_predictions(all_val_preds, all_val_pred_probs)
+
+            #Once trained we can do the inference on the test data: (takes a while)
+            test_pred_probs = self.get_test_prediction_probabilities()
+
+            #Add this to the all_test_pred_prob
+            for k in test_pred_probs:
+                if k in all_test_pred_probs:
+                    all_test_pred_probs[k] += test_pred_probs[k]
+                else:
+                    all_test_pred_probs[k] = test_pred_probs[k]
+
+        #Once we've done that
+        #Take the average over all these predictions:
+        for k in all_test_pred_probs:
+            all_test_pred_probs[k] /= n_folds
+
+        fn_val_out = f'{path}/deep_learning_stacking_predictions_baseline_test_run_distances.npy'
+        np.save(fn_val_out, all_val_preds)
+
+        fn_val_out = f'{path}/deep_learning_stacking_prediction_probabilities_baseline_test_run_distances.npy'
+        np.save(fn_val_out, all_val_pred_probs)
+
+        #Save the test probabilities, averaged over the k models
+        fn_test_out = f'{path}/deep_learning_stacking_prediction_probabilities_test_baseline_test_run_distances.npy'
+        np.save(fn_test_out, all_test_pred_probs)        
+
+    def get_train_data(self):
+        x_val = []
+        y_val = []
+        for x, y in self.train_generator_unshuffled:
+            x_val.extend(list(x))
+            y_val.extend(list(y))
+
+        return x_val, y_val
+
+    def get_train_labels(self, on_test_set=False):
+        y_val = []
+        for _, y in self.train_generator_unshuffled:
+            y_val.extend(list(y))
+        y_val = np.argmax(np.array(y_val), axis=-1)
+
+        if len(y_val.shape) > 1:
+            y_val = y_val[:,0]
+
+        return y_val
+
+    def get_val_predictions(self):
+        return 
+
+    def get_train_predictions(self, on_test_set=False):
+        y_val_pred = self.model.predict(self.train_generator_unshuffled)
+        y_val_pred = np.argmax(y_val_pred, axis=-1)
+
+        #Check if dimensions show we need to convert to a single prediction for 
+        #each time point
+        if len(y_val_pred.shape) > 1:
+            y_val_pred = self.get_final_val_predictions(y_val_pred)
+
+        return y_val_pred
+
+    def get_train_probability_predictions(self):
+        y_val_pred = self.model.predict(self.train_generator_unshuffled)
+
+        if len(y_val_pred.shape) > 2:
+            y_val_pred = self.get_final_val_probabilities(y_val_pred)
+
+        return y_val_pred
+
+    def get_test_predictions(self):
+        all_test_preds = {}
+        for vkey in self.test_generator.video_keys:
+            nframes = self.test_generator.seq_lengths[vkey]
+            all_test_preds[vkey] = np.zeros(nframes, dtype=np.int32)
+
+        for X, vkey_fi_list in tqdm.tqdm(self.test_generator):
+            test_pred = self.model.predict(X)
+            test_pred = np.argmax(test_pred, axis=-1)
+
+            if len(test_pred.shape) > 1:
+                test_pred = self.get_final_val_predictions(test_pred)
+
+            for p, (vkey, fi) in zip(test_pred, vkey_fi_list):
+                all_test_preds[vkey][fi] = p
+        return all_test_preds
+
+    def get_test_prediction_probabilities(self):
+        all_test_preds = {}
+        for vkey in self.test_generator.video_keys:
+            nframes = self.test_generator.seq_lengths[vkey]
+            all_test_preds[vkey] = np.zeros((nframes,4), dtype=np.float32)
+
+        for X, vkey_fi_list in tqdm.tqdm(self.test_generator):
+            test_pred = self.model.predict(X)
+            #test_pred = np.argmax(test_pred, axis=-1)
+
+            if len(test_pred.shape) > 2:
+                test_pred = self.get_final_val_probabilities(test_pred)
+
+            for p, (vkey, fi) in zip(test_pred, vkey_fi_list):
+                all_test_preds[vkey][fi] = p
+        return all_test_preds
+
+def normalize_data(orig_pose_dictionary):
+    for key in orig_pose_dictionary:
+        X = orig_pose_dictionary[key]['keypoints']
+        X = X.transpose((0,1,3,2)) #last axis is x, y coordinates
+        X[..., 0] = X[..., 0]/1024
+        X[..., 1] = X[..., 1]/570
+        orig_pose_dictionary[key]['keypoints'] = X
+    return orig_pose_dictionary
+
+def split_validation_cv(orig_pose_dictionary, vocabulary, number_to_class, seed=2021, 
+                       n_folds = 5):
+
+    def num_to_text(anno_list):
+        return np.vectorize(number_to_class.get)(anno_list)
+
+    def get_percentage(sequence_key):
+        anno_seq = num_to_text(orig_pose_dictionary[sequence_key]['annotations'])
+        counts = {k: np.mean(np.array(anno_seq) == k) for k in vocabulary}
+        return counts
+
+    anno_percentages = {k: get_percentage(k) for k in orig_pose_dictionary}
+    anno_perc_df = pd.DataFrame(anno_percentages).T
+    rng_state = np.random.RandomState(seed)
+
+    splitter = KFold(n_splits=n_folds, random_state=rng_state, shuffle = True)
+
+    return splitter, anno_perc_df
+
+
+def split_validation(orig_pose_dictionary, vocabulary, number_to_class, seed=2021, 
+                       test_size=0.5, split_videos=False):
+    if split_videos:
+        pose_dictionary = {}
+        for key in orig_pose_dictionary:
+            key_pt1 = key + '_part1'
+            key_pt2 = key + '_part2'
+            anno_len = len(orig_pose_dictionary[key]['annotations'])
+            split_idx = anno_len//2
+            pose_dictionary[key_pt1] = {
+                'annotations': orig_pose_dictionary[key]['annotations'][:split_idx],
+                'keypoints': orig_pose_dictionary[key]['keypoints'][:split_idx]}
+            pose_dictionary[key_pt2] = {
+                'annotations': orig_pose_dictionary[key]['annotations'][split_idx:],
+                'keypoints': orig_pose_dictionary[key]['keypoints'][split_idx:]}
+    else:
+        pose_dictionary = orig_pose_dictionary
+
+    def num_to_text(anno_list):
+        return np.vectorize(number_to_class.get)(anno_list)
+
+    def get_percentage(sequence_key):
+        anno_seq = num_to_text(pose_dictionary[sequence_key]['annotations'])
+        counts = {k: np.mean(np.array(anno_seq) == k) for k in vocabulary}
+        return counts
+
+    anno_percentages = {k: get_percentage(k) for k in pose_dictionary}
+
+    anno_perc_df = pd.DataFrame(anno_percentages).T
+
+    rng_state = np.random.RandomState(seed)
+    try:
+        idx_train, idx_val = train_test_split(anno_perc_df.index,
+                                      stratify=anno_perc_df['attack'] > 0, 
+                                      test_size=test_size,
+                                      random_state=rng_state)
+    except:
+        idx_train, idx_val = train_test_split(anno_perc_df.index,
+                                      test_size=test_size,
+                                      random_state=rng_state)
+    
+    train_data = {k : pose_dictionary[k] for k in idx_train}
+    val_data = {k : pose_dictionary[k] for k in idx_val}
+    return train_data, val_data, anno_perc_df
+
+def run_task(results_dir, dataset, vocabulary, test_data, config_name, number_to_class,
+              build_model, augment=False, epochs=15, skip_test_prediction=False, seed=2021,
+              Generator = MABe_Generator, use_callbacks = False, params = None):
+
+    if params is None:
+        if config_name is None:
+            raise ValueError("Provide one of params dictionary or config_name with path to json file")
+        with open(config_name, 'r') as fp:
+            params = json.load(fp)
+
+    val_size = params["val_size"]
+    normalize = params["normalize"]
+    params["seed"] = seed
+    seed_everything(seed)
+    split_videos = params["split_videos"]
+
+    if "steps_per_epoch" in params:
+        steps_per_epoch = params["steps_per_epoch"]
+        if steps_per_epoch == -1:
+            steps_per_epoch = None
+    else:
+        steps_per_epoch = None
+
+    features = params['features']
+    feature_dim = feature_spaces[features][1]
+    featurizer = feature_spaces[features][0]
+
+    if normalize:
+        dataset = normalize_data(deepcopy(dataset))
+        if not skip_test_prediction:
+            test_data = normalize_data(deepcopy(test_data))
+        else:
+            test_data = None
+
+    splitter, anno_perc_df = split_validation_cv(dataset, 
+                                    seed=seed,
+                                    number_to_class = number_to_class,
+                                    vocabulary=vocabulary,
+                                    n_folds = 5)                               
+
+    num_classes = len(anno_perc_df.keys())
+
+    use_conv = True
+    augment = False 
+
+    epochs = params["epochs"]
+
+    #Override with: 
+    #epochs = 1
+
+    class_to_number = vocabulary
+
+    trainer = Trainer(pose_dictionary = dataset,
+                    test_data = test_data,
+                    splitter=splitter,
+                    anno_df=anno_perc_df,
+                    feature_dim=feature_dim, 
+                    batch_size=params['batch_size'], 
+                    num_classes=num_classes,
+                    augment=augment,
+                    class_to_number=class_to_number,
+                    past_frames=params['past_frames'], 
+                    future_frames=params['future_frames'],
+                    frame_gap=params['frame_gap'],
+                    use_conv=use_conv,
+                    build_model = build_model,
+                    Generator = Generator,
+                    use_callbacks = use_callbacks,
+                    learning_decay_freq=params['learning_decay_freq'],
+                    featurizer = featurizer)
+
+    #Extract model param dictionary
+    model_params = {}
+    for k in params:
+        if 'model_param' in k:
+            k_ = k.split('__')[1]
+            model_params[k_] = params[k]
+
+    class_weight_lambda = 1
+
+    if params['reweight_loss'] is True:
+        if len(trainer.train_generator.class_weights.shape) == 1:
+            class_weight = {k:class_weight_lambda/(v+class_weight_lambda) for k,v in enumerate(trainer.train_generator.class_weights)}
+        else:
+            class_weight = 1/trainer.train_generator.class_weights
+        #class_weight = 1/trainer.train_generator.class_weights
+    else:
+        class_weight = None
+
+    model_params['class_weight'] = class_weight
+
+    trainer.train(epochs=epochs, steps_per_epoch = steps_per_epoch, class_weight = class_weight, model_params = model_params)
+
+    #Once done the training then produce the test predictions with the trained model (Retrained on everything?)
+    #trainer.train_all(epochs=epochs, steps_per_epoch = steps_per_epoch, class_weight = class_weight, model_params = model_params)
+
+    #Then we can make predictions on the test data
+
+
+    return trainer
+
+def lrs(epoch, lr, freq = 10):
+    if (epoch % freq) == 0 and epoch > 0:
+        lr /= 3 
+    return lr
+
+def run_all(arguments, config):
+    train = np.load(path + 'data/train.npy',allow_pickle=True).item()
+    test = np.load(path + 'data/test.npy',allow_pickle=True).item()
+    sample_submission = np.load(path + 'data/sample_submission.npy',allow_pickle=True).item()
+        
+    class_to_number = {s: i for i, s in enumerate(train['vocabulary'])}
+    
+    number_to_class = {i: s for i, s in enumerate(train['vocabulary'])}
+
+    results_dir = path
+    trainer = run_task(results_dir,
+                        dataset=train['sequences'], 
+                        vocabulary=train['vocabulary'],
+                        test_data=test['sequences'],
+                        config_name = None,
+                        build_model = arguments['build_model'],
+                        number_to_class = number_to_class,
+                        seed=2021,
+                        Generator = arguments['Generator'],
+                        use_callbacks = arguments['use_callbacks'],
+                        params = config)
+
+def main():
+
+    parametersweep = 'test_run_distances'
+    config_name = path + '/config/dl_baseline_settings.json'
+    build_model = build_baseline_model
+    Generator = MABe_Generator
+    use_callbacks = False
+    sweeps = sweeps_baseline
+
+    #Load default config
+    with open(config_name, 'r') as fp:
+        default_config = json.load(fp)
+    if 'model_param__layer_channels' in default_config:
+        default_config['model_param__layer_channels'] = tuple(default_config['model_param__layer_channels'])
+
+    config = default_config.copy()
+
+    #Modify to setup parameter sweep    
+    for k in sweeps[parametersweep][1]:
+        config[k] = sweeps[parametersweep][1][k]
+
+    run_arguments = {'config_name': config_name,
+            'build_model': build_model,
+            'Generator': Generator,
+            'use_callbacks': use_callbacks}
+
+    test_config = config.copy()
+    test_config['future_frames'] = 50
+    test_config['past_frames'] = 50
+    test_config['model_param__learning_rate'] = 0.0001
+
+    run_all(run_arguments, test_config)
+    
+if __name__ == "__main__":
+    main()
