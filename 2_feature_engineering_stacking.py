@@ -70,7 +70,7 @@ def make_stacked_features(train_df, test_df):
         level0.append(['rf_gini', RandomForestClassifier(n_estimators = 20, criterion='gini', n_jobs = 5), [], []])
 
         for idx in range(len(level0)):
-            name, model, _ = level0[idx]
+            name, model, _, _ = level0[idx]
             print(f"Fitting {name} in fold {fold_idx}")
             #Train the models on each fold, make prediction on held-out for each fold
             model.fit(X_train, y_train)
@@ -134,22 +134,17 @@ def make_stacked_features(train_df, test_df):
     for seq_id in seq_ids:
         mars_features_df_test.loc[mars_features_df_test['seq_id'] == seq_id, col_names] = np.array(all_test_df.loc[all_test_df['seq_id'] == seq_id, col_names])
 
-    # Check the seq_id column is in right format...? For test and for train
-
     # Save the feature files
-
     mars_features_df.to_csv(f'./data/intermediate/train_{name}.csv', index = False)
     with open(f'./data/intermediate/test_map_{name}.pkl', 'wb') as handle:
         pickle.dump(reversemap_test, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
+    print('Saving test feature file (may take a while)')
     mars_features_df_test.to_csv(f'./data/intermediate/test_{name}.csv', index = False)
 
     return mars_features_df, reversemap, name, mars_features_df_test, reversemap_test
 
 def main():
-
-    # Load in MARS distr train and test features
-    #train_df = pd.read_csv('./data/intermediate/train_features_mars_distr.csv')
-    #test_df = pd.read_csv('./data/intermediate/test_features_mars_distr.csv')
 
     train_df = pd.read_csv('./data/intermediate/train_df.csv')
     test_df = pd.read_csv('./data/intermediate/test_df.csv')
@@ -158,10 +153,10 @@ def main():
     train_features, _, name, test_features, test_map = make_stacked_features(train_df, test_df)
 
     #Save
-    train_features.to_csv(f'./data/intermediate/train_{name}.csv', index = False)
-    test_features.to_csv(f'./data/intermediate/test_{name}.csv', index = False)
-    with open(f'./data/intermediate/test_map_{name}.pkl', 'wb') as handle:
-        pickle.dump(test_map, handle, protocol=pickle.HIGHEST_PROTOCOL)
+    #train_features.to_csv(f'./data/intermediate/train_{name}.csv', index = False)
+    #test_features.to_csv(f'./data/intermediate/test_{name}.csv', index = False)
+    #with open(f'./data/intermediate/test_map_{name}.pkl', 'wb') as handle:
+    #    pickle.dump(test_map, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
 if __name__ == "__main__":
     main()

@@ -1,7 +1,8 @@
 from keras.models import Sequential
 import keras.layers as layers
+import keras
 
-from mabetask1.fscores import F1Score
+from fscores import F1Score
 
 def build_baseline_model(input_dim, layer_channels=(512, 256), dropout_rate=0., 
                         learning_rate=1e-3, conv_size=5, num_classes = 4,

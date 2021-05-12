@@ -1,6 +1,6 @@
 from ray import tune
 
-from mabetask1.model.dl_generators import *
+from dl_generators import *
 
 feature_spaces = {'distances': [features_distances, [91]], 
                     'identity': [features_identity, [2,7,2]],
