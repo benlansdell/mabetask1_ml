@@ -36,13 +36,6 @@ A more detailed description can be found in `model.pdf`
 
 All the commands to go from downloading the data to submitting the final predictions are detailed in `pipeline.sh`
 
-## Contents
-
-* ml_env.yaml -- yaml file containing full list of packages for reproducibility
-* pipeline.sh -- the whole pipeline -- from downloading data to submitting -- can be reproduced with pipeline.sh
-* model.pdf -- a more detailed description of the model 
-* LICENSE.txt -- public license
-
 ## References
 
 [1] Segalin et al 2020. The Mouse Action Recognition System (MARS): a software pipeline for automated analysis of social behaviors in mice. bioRxiv. `https://www.biorxiv.org/content/10.1101/2020.07.26.222299v1.full`
