@@ -348,7 +348,7 @@ make_features_mars_distr = lambda x: make_features_mars(x, n_shifts = 3, mode = 
 
 def make_features_mars_w_1dcnn_features(df, n_shifts = 3, mode = 'shift', 
                                          feature_set_name = 'features_mars_distr_w_1dcnn',
-                                         fn_in = './data/intermediate/deep_learning_stacking_prediction_probabilities_baseline_test_run_distances.npy_orig'):
+                                         fn_in = './data/intermediate/deep_learning_stacking_prediction_probabilities_baseline_test_run_distances.npy'):
 
     features_df, reversemap, _ = make_features_mars_distr(df)
     forwardmap = {i:k for k,i in reversemap.items()}
@@ -371,4 +371,4 @@ def make_features_mars_w_1dcnn_features(df, n_shifts = 3, mode = 'shift',
     return features_df, reversemap, feature_set_name
 
 make_features_mars_w_1dcnn_features_test = lambda x: make_features_mars_w_1dcnn_features(x, n_shifts = 3, mode = 'shift', feature_set_name = 'features_mars_distr_w_1dcnn',
-                                         fn_in = './data/intermediate/deep_learning_stacking_prediction_probabilities_test_baseline_test_run_distances.npy_orig')
+                                         fn_in = './data/intermediate/deep_learning_stacking_prediction_probabilities_test_baseline_test_run_distances.npy')

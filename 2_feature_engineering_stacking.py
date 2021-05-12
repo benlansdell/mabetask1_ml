@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 import argparse
 import pickle 
-from mabetask1_ml.lib.helper import xy_ids, bodypart_ids, mouse_ids, colnames
+from lib.helper import xy_ids, bodypart_ids, mouse_ids, colnames
 
 from itertools import product
 
@@ -28,7 +28,7 @@ def make_stacked_features(train_df, test_df):
     mars_features_df, reversemap, _ = make_features_mars_w_1dcnn_features(train_df)
     mars_features_df_test, reversemap_test, _ = make_features_mars_w_1dcnn_features_test(test_df)
 
-    name = 'features_mars_distr_stacked_w_1dcnn'
+    features_name = 'features_mars_distr_stacked_w_1dcnn'
     
     n_folds = 5
 
@@ -64,10 +64,10 @@ def make_stacked_features(train_df, test_df):
         # Define a bunch of models for the stacking, one for each fold
         level0 = list()
         level0.append(['bayes', Pipeline([('scaler', StandardScaler()), ('nb', GaussianNB())]), [], []])
-        level0.append(['et_entropy', ExtraTreesClassifier(n_estimators = 100, criterion='entropy', n_jobs = 5, verbose = 1), [], []])
-        level0.append(['et_gini', ExtraTreesClassifier(n_estimators = 100, criterion='gini', n_jobs = 5, verbose = 1), [], []])
-        level0.append(['rf_entropy', RandomForestClassifier(n_estimators = 20, criterion='entropy', n_jobs = 5), [], []])
-        level0.append(['rf_gini', RandomForestClassifier(n_estimators = 20, criterion='gini', n_jobs = 5), [], []])
+        level0.append(['et_entropy', ExtraTreesClassifier(n_estimators = 100, criterion='entropy', n_jobs = 5, verbose = 1, random_state = 42), [], []])
+        level0.append(['et_gini', ExtraTreesClassifier(n_estimators = 100, criterion='gini', n_jobs = 5, verbose = 1, random_state = 42), [], []])
+        level0.append(['rf_entropy', RandomForestClassifier(n_estimators = 20, criterion='entropy', n_jobs = 5, random_state = 42), [], []])
+        level0.append(['rf_gini', RandomForestClassifier(n_estimators = 20, criterion='gini', n_jobs = 5, random_state = 42), [], []])
 
         for idx in range(len(level0)):
             name, model, _, _ = level0[idx]
@@ -135,12 +135,12 @@ def make_stacked_features(train_df, test_df):
         mars_features_df_test.loc[mars_features_df_test['seq_id'] == seq_id, col_names] = np.array(all_test_df.loc[all_test_df['seq_id'] == seq_id, col_names])
 
     # Save the feature files
-    mars_features_df.to_csv(f'./data/intermediate/train_{name}.csv', index = False)
-    with open(f'./data/intermediate/test_map_{name}.pkl', 'wb') as handle:
+    mars_features_df.to_csv(f'./data/intermediate/train_{features_name}.csv', index = False)
+    with open(f'./data/intermediate/test_map_{features_name}.pkl', 'wb') as handle:
         pickle.dump(reversemap_test, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
     print('Saving test feature file (may take a while)')
-    mars_features_df_test.to_csv(f'./data/intermediate/test_{name}.csv', index = False)
+    mars_features_df_test.to_csv(f'./data/intermediate/test_{features_name}.csv', index = False)
 
     return mars_features_df, reversemap, name, mars_features_df_test, reversemap_test
 

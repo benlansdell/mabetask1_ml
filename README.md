@@ -1,4 +1,4 @@
-# Multi-agent behavioral analysis AIcrowd challenge -- task 1 (classical classification)
+# Multi-agent behavioral analysis AIcrowd challenge -- Task 1 (classical classification)
 
 Ben Lansdell (ben.lansdell@stjude.org)
 
@@ -10,7 +10,15 @@ Here is code to reproduce the submission that produced my highest score on the 7
 
 This python code is most easily reproduced using a conda environment:
 
-asdf
+```
+conda env create -f ml_env.yml
+conda activate ml_mabe
+
+#Install Linderman's HMM code (in the SSM package):
+git clone git@github.com:slinderman/ssm.git
+cd ssm
+pip install -e .
+```
 
 ## The basic approach
 
@@ -26,11 +34,10 @@ A more detailed description can be found in `model.pdf`
 
 ## Running the pipeline
 
-Commands to go from downloading the data to submitting the final predictions are detailed in `pipeline.sh`
+All the commands to go from downloading the data to submitting the final predictions are detailed in `pipeline.sh`
 
 ## Contents
 
-* requirements.txt -- short list of package requirements (should be sufficient for reproducibility)
 * ml_env.yaml -- yaml file containing full list of packages for reproducibility
 * pipeline.sh -- the whole pipeline -- from downloading data to submitting -- can be reproduced with pipeline.sh
 * model.pdf -- a more detailed description of the model 
