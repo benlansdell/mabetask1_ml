@@ -24,13 +24,13 @@ pip install -e .
 
 The idea is a combination of a 1DCNN deep learning model (based on baseline code), whose output probabilities are used as input for more classical ML approaches, alongside a set of handcrafted features. In more detail:
 
-1. Generate predictions of 1DCNN model, using the set of distances between all keypoints as input to the network, rather than the raw positions. Predictions are made through a 5-fold cross validation prediction procedure. 
-2. Concatenate these 1DCNN predictions to a set of handcrafted features inspired by the MARS model [1].
-3. Through a separate 5-fold cross validation prediction procedure, generate predictions of a set of basic ML models, to build a stacking classifier. 
-4. Concatentate the probability predictions of these models, along with the handcrafted features and the 1DCNN features.
-5. Train an XGB model for the final predictor
+1. Generate predictions of a 1DCNN neural network, using the set of distances between all key-points as input to the network, rather than the raw positions. Predictions are made through a 5-fold cross validation prediction procedure. Denote the predicted probabilities $X_{CNN}$.
+2. Generate a set of handcrafted features based on the MARS model [1]. Denote the handcrafted features $X_{HC}$.
+3. Through a separate 5-fold cross validation prediction procedure, generate predictions of a set of basic ML models, trained on $[X_{CNN}, X_{HC}]$. Call the prediction of these models a new set of features, $X_{ML}$.
+4. Train an XGB model on the features $[X_{CNN}, X_{HC}, X_{ML}]$.
+5. Perform some final tweaks of the output of the XGB model to finalize predictions.
 
-A more detailed description can be found in `model.pdf`
+A more detailed description can be found in `MABE_challenge_writeup.pdf`
 
 ## Running the pipeline
 

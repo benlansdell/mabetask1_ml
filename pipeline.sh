@@ -27,7 +27,7 @@ python 1_deep_learning_stacking.py
 
 #Step 2
 # Create features for model stacking
-# ~3-4 hours, note also that the test features csv file is ~100GB
+# ~3-4 hours, note also that the test features csv file is ~100GB -- need both the RAM and HD space to run
 python 2_feature_engineering_stacking.py 
 
 #Step 3 
