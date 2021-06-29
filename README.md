@@ -1,10 +1,10 @@
-# Multi-agent behavioral analysis AIcrowd challenge -- Task 1 (classical classification)
+# Multi-agent behavioral analysis AIcrowd challenge -- 
 
 Ben Lansdell (ben.lansdell@stjude.org)
 
-## Overview
+## Inference on DLC and BORIS datasets
 
-Here is code to reproduce the submission that produced my highest score on the 70% public testset (with ID 133118).
+Contains code to run behavior prediction on poses extracted by DLC and compare with behavior annotations extracted by BORIS.
 
 ## Setup
 
@@ -20,21 +20,31 @@ cd ssm
 pip install -e .
 ```
 
-## The basic approach
+## How to run
 
-The idea is a combination of a 1DCNN deep learning model (based on baseline code), whose output probabilities are used as input for more classical ML approaches, alongside a set of handcrafted features. In more detail:
+1. Extract pose info from a h5 DLC file, save in a format the MABE competition understands. DONE
+2. Run 0_basic_data_formatting.py to format this file for ML. DONE
+3. Run 1_deep_learning_stacking.py to run inference of previously trained network and extract deep learning prediction features. DONE
+4. Run 2_feature_engineering_stacking.py to use these features along with other previously trained ML features to create final feature set of hand-crafted features along with DL and classic ML prediction features. DONE
+5. Finally, run a previously trained XGB model on all of these features. DONE
+6. Perform some final tweaks (e.g. filter predictions with a HMM). DONE
+
+After we have the predictions:
+* Extract from test prediction dictionary, per video. Have to link our silly md5 key to the video...
+* Make a video that displays the prediction for each frame
+* If time: load in BORIS data and compare performance
+
+We want to compare these predictions to hand-collected annotations.
+
+## The ML approach
+
+The idea is a combination of a 1DCNN deep learning model, whose output probabilities are used as input for more classical ML approaches, alongside a set of handcrafted features. In more detail:
 
 1. Generate predictions of a 1DCNN neural network, using the set of distances between all key-points as input to the network, rather than the raw positions. Predictions are made through a 5-fold cross validation prediction procedure. Denote the predicted probabilities $X_{CNN}$.
 2. Generate a set of handcrafted features based on the MARS model [1]. Denote the handcrafted features $X_{HC}$.
 3. Through a separate 5-fold cross validation prediction procedure, generate predictions of a set of basic ML models, trained on $[X_{CNN}, X_{HC}]$. Call the prediction of these models a new set of features, $X_{ML}$.
 4. Train an XGB model on the features $[X_{CNN}, X_{HC}, X_{ML}]$.
 5. Perform some final tweaks of the output of the XGB model to finalize predictions.
-
-A more detailed description can be found in `MABE_challenge_writeup.pdf`
-
-## Running the pipeline
-
-All the commands to go from downloading the data to submitting the final predictions are detailed in `pipeline.sh`
 
 ## References
 

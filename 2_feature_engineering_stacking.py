@@ -6,6 +6,8 @@ from lib.helper import xy_ids, bodypart_ids, mouse_ids, colnames
 
 from itertools import product
 
+from joblib import load
+
 from sklearn.impute import SimpleImputer
 
 import sklearn.metrics 
@@ -73,7 +75,11 @@ def make_stacked_features(train_df, test_df):
             name, model, _, _ = level0[idx]
             print(f"Fitting {name} in fold {fold_idx}")
             #Train the models on each fold, make prediction on held-out for each fold
-            model.fit(X_train, y_train)
+#            model.fit(X_train, y_train)
+
+            #Save the models too
+            model = load(f'./results/level_0_model_{idx}_fold_{fold_idx}.joblib')
+
             predict_proba_val = model.predict_proba(X_val)
             predict_proba_test = model.predict_proba(X_test)
             #Save this
@@ -151,12 +157,6 @@ def main():
 
     #Make features
     train_features, _, name, test_features, test_map = make_stacked_features(train_df, test_df)
-
-    #Save
-    #train_features.to_csv(f'./data/intermediate/train_{name}.csv', index = False)
-    #test_features.to_csv(f'./data/intermediate/test_{name}.csv', index = False)
-    #with open(f'./data/intermediate/test_map_{name}.pkl', 'wb') as handle:
-    #    pickle.dump(test_map, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
 if __name__ == "__main__":
     main()

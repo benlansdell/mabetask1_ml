@@ -209,43 +209,23 @@ class Trainer:
         all_val_pred_probs = {}
         all_test_pred_probs = {}
 
+        count = 0
         #Repeat this fit process:
         for tg, vg_train, vg_predict in zip(self.train_generators, self.val_generators_train, self.val_generators_predict):
 
             #Reinit model to start training again
             self.initialize_model(**model_params)
 
-            #Train model
-            self.model.fit(tg,
-                validation_data=vg_train,
-                epochs=epochs,
-                steps_per_epoch = steps_per_epoch,
-                callbacks = callbacks,
-                **kwargs)
+            #Instead of training, just load the model
+            #loaded_model = keras.models.load_model(f'./results/task1_trained_model_fold_{count}.h5')
+            #keras.models.load_model(f'./results/task1_model_fold_{count}/the_model')
+            loaded_model = self.model
+            loaded_model.load_weights(f'./results/task1_model_fold_{count}/the_model/variables/variables')
+            self.model = loaded_model 
 
-            #For each validation video:
-            def get_val_predictions(all_val_preds, all_val_pred_probs):
-                for vkey in vg_predict.video_keys:
-                    nframes = vg_predict.seq_lengths[vkey]
-                    all_val_preds[vkey] = np.zeros(nframes, dtype=np.int32)
-                    all_val_pred_probs[vkey] = np.zeros((nframes, num_classes), dtype=np.float32)
+            count += 1
 
-                for X, vkey_fi_list in tqdm.tqdm(vg_predict):
-                    val_pred_prob = self.model.predict(X)
-                    val_pred = np.argmax(val_pred_prob, axis=-1)
-
-                    for idx in range(len(val_pred)):
-                        pr = val_pred_prob[idx,:]
-                        (vkey, fi) = vkey_fi_list[idx]
-                        all_val_pred_probs[vkey][fi] = pr                        
-
-                    for p, (vkey, fi) in zip(val_pred, vkey_fi_list):
-                        all_val_preds[vkey][fi] = p
-
-            #Predict on validation data
-            get_val_predictions(all_val_preds, all_val_pred_probs)
-
-            #Once trained we can do the inference on the test data: (takes a while)
+            #Once trained we can do the inference on the test data:
             test_pred_probs = self.get_test_prediction_probabilities()
 
             #Add this to the all_test_pred_prob
@@ -259,12 +239,6 @@ class Trainer:
         #Take the average over all these predictions:
         for k in all_test_pred_probs:
             all_test_pred_probs[k] /= n_folds
-
-        fn_val_out = f'{path}/data/intermediate/deep_learning_stacking_predictions_baseline_test_run_distances.npy'
-        np.save(fn_val_out, all_val_preds)
-
-        fn_val_out = f'{path}/data/intermediate/deep_learning_stacking_prediction_probabilities_baseline_test_run_distances.npy'
-        np.save(fn_val_out, all_val_pred_probs)
 
         #Save the test probabilities, averaged over the k models
         fn_test_out = f'{path}/data/intermediate/deep_learning_stacking_prediction_probabilities_test_baseline_test_run_distances.npy'
@@ -291,8 +265,16 @@ def normalize_data(orig_pose_dictionary):
     for key in orig_pose_dictionary:
         X = orig_pose_dictionary[key]['keypoints']
         X = X.transpose((0,1,3,2)) #last axis is x, y coordinates
-        X[..., 0] = X[..., 0]/1024
-        X[..., 1] = X[..., 1]/570
+        #How should we normalize now????
+        X[..., 0] = X[..., 0]/1600
+        X[..., 1] = X[..., 1]/1200
+
+        #There are other options... but we'll go with this for now
+
+        #Original normalization
+        #X[..., 0] = X[..., 0]/1024
+        #X[..., 1] = X[..., 1]/570
+
         orig_pose_dictionary[key]['keypoints'] = X
     return orig_pose_dictionary
 
@@ -433,7 +415,7 @@ def main():
     config['model_param__learning_rate'] = 0.0001
 
     train = np.load(path + 'data/train.npy',allow_pickle=True).item()
-    test = np.load(path + 'data/test.npy',allow_pickle=True).item()
+    test = np.load(path + 'data/test_inference.npy',allow_pickle=True).item()
             
     number_to_class = {i: s for i, s in enumerate(train['vocabulary'])}
 

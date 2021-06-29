@@ -2,9 +2,7 @@ import numpy as np
 import pandas as pd
 from lib.helper import colnames
 
-train = np.load('data/train.npy',allow_pickle=True).item()
-test = np.load('data/test.npy',allow_pickle=True).item()
-sample_submission = np.load('data/sample_submission.npy',allow_pickle=True).item()
+test = np.load('data/test_inference.npy',allow_pickle=True).item()
 
 def make_df(raw_data, add_annotations = True):
     """
@@ -33,7 +31,4 @@ def make_df(raw_data, add_annotations = True):
     return df_
 
 test_df = make_df(test)
-train_df = make_df(train)
-
 test_df.to_csv('./data/intermediate/test_df.csv')
-train_df.to_csv('./data/intermediate/train_df.csv')
