@@ -8,6 +8,8 @@ from itertools import product
 
 from sklearn.impute import SimpleImputer
 
+from joblib import dump
+
 import sklearn.metrics 
 from sklearn.model_selection import GroupKFold
 from sklearn.metrics import f1_score
@@ -80,6 +82,9 @@ def make_stacked_features(train_df, test_df):
             level0[idx][2] = predict_proba_val
             level0[idx][3] = predict_proba_test
 
+            #Save the models too
+            dump(model, f'./results/level_0_model_{idx}_fold_{fold_idx}.joblib')
+
         all_base_models.append(level0)
 
     # Once done, concat predictions to make train data for XGB. 
@@ -151,12 +156,6 @@ def main():
 
     #Make features
     train_features, _, name, test_features, test_map = make_stacked_features(train_df, test_df)
-
-    #Save
-    #train_features.to_csv(f'./data/intermediate/train_{name}.csv', index = False)
-    #test_features.to_csv(f'./data/intermediate/test_{name}.csv', index = False)
-    #with open(f'./data/intermediate/test_map_{name}.pkl', 'wb') as handle:
-    #    pickle.dump(test_map, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
 if __name__ == "__main__":
     main()

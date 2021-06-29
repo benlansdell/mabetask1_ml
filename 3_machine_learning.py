@@ -13,6 +13,8 @@ import xgboost as xgb
 #Support for HMMs
 import ssm
 
+from joblib import dump
+
 from lib.utils import seed_everything, validate_submission
 from lib.helper import API_KEY
 
@@ -73,7 +75,7 @@ def fit_hmm(gt, emissions_raw, preds_raw, D, C):
 
     #Emission probs, stored as logits
     true_hmm.observations.params = logit(emission_dist)
-        
+            
     return true_hmm
 
 def infer_hmm(hmm, emissions_raw, preds_raw, C):
@@ -126,6 +128,9 @@ def run_xgb(X_train, y_train, X_val, y_val, groups, params = None, refit = False
     model = xgb.XGBClassifier(**params)
     print("Fitting XGB model")
     model.fit(X_train, y_train)
+
+    #Save the model
+    dump(model, f'./results/level_1_model_xgb.joblib')
 
     #Compute proba
     pred_proba_train = model.predict_proba(X_train)
@@ -204,6 +209,11 @@ def main(args):
     D = pred_proba_train.shape[1]
     C = 11
     hmm_reweighted = fit_hmm(np.array(y_train), np.array(train_pred_probs_reweighted), np.array(train_pred_reweighted), D, C)
+
+    hmm = fit_hmm(np.array(y_train), np.array(pred_proba_train), np.array(pred_train), D, C)
+
+    #Save the models too
+    dump(hmm, f'./results/level_1_hmm_model.joblib')
 
     if args.test:
 

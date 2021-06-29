@@ -179,6 +179,7 @@ class Trainer:
                                             mode='predict',
                                             featurize = featurizer)
                                     )
+        self.models = []
 
     def delete_model(self):
         self.model = None
@@ -210,6 +211,7 @@ class Trainer:
         all_test_pred_probs = {}
 
         #Repeat this fit process:
+        count = 0
         for tg, vg_train, vg_predict in zip(self.train_generators, self.val_generators_train, self.val_generators_predict):
 
             #Reinit model to start training again
@@ -222,6 +224,17 @@ class Trainer:
                 steps_per_epoch = steps_per_epoch,
                 callbacks = callbacks,
                 **kwargs)
+
+            print("saving this fold's trained model")
+            
+            new_dir = f'./results/task1_model_fold_{count}/' 
+            try:
+                os.mkdir(new_dir)
+            except FileExistsError:
+                pass
+            self.model.save(new_dir + 'the_model')
+
+            count += 1
 
             #For each validation video:
             def get_val_predictions(all_val_preds, all_val_pred_probs):
